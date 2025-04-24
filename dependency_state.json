@@ -1,0 +1,283 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "type": "tbl",
+      "schema": "business_vault",
+      "name": "br_payment",
+      "source_type": "model",
+      "file_path": "business_vault/business_vault.br_payment.sql",
+      "id": "tbl:business_vault.br_payment"
+    },
+    {
+      "type": "tbl",
+      "schema": "mwl",
+      "name": "mysq_payments",
+      "source_type": "source_table",
+      "id": "tbl:mwl.mysq_payments"
+    },
+    {
+      "type": "tbl",
+      "schema": "mwl",
+      "name": "users",
+      "source_type": "source_table",
+      "id": "tbl:mwl.users"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "user_hash_key",
+      "id": "col:business_vault.br_payment.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "fake",
+      "id": "col:business_vault.br_payment.fake"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "project_id",
+      "id": "col:business_vault.br_payment.project_id"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "closed_at",
+      "id": "col:business_vault.br_payment.closed_at"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "operation_id",
+      "id": "col:business_vault.br_payment.operation_id"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "status",
+      "id": "col:business_vault.br_payment.status"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "sum",
+      "id": "col:business_vault.br_payment.sum"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "sum_usd",
+      "id": "col:business_vault.br_payment.sum_usd"
+    },
+    {
+      "type": "tbl",
+      "schema": "public",
+      "name": "total_stat",
+      "source_type": "model",
+      "file_path": "public/public.total_stat.sql",
+      "id": "tbl:public.total_stat"
+    },
+    {
+      "type": "tbl",
+      "schema": "public",
+      "name": "user_daily_kpi",
+      "source_type": "model",
+      "file_path": "public/public.user_daily_kpi.sql",
+      "id": "tbl:public.user_daily_kpi"
+    },
+    {
+      "type": "tbl",
+      "schema": "reference",
+      "name": "project",
+      "source_type": "source_table",
+      "id": "tbl:reference.project"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "total_stat",
+      "column": "project_name",
+      "id": "col:public.total_stat.project_name"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "total_stat",
+      "column": "date",
+      "id": "col:public.total_stat.date"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "total_stat",
+      "column": "deposit_usd",
+      "id": "col:public.total_stat.deposit_usd"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "total_stat",
+      "column": "withdrawal_usd",
+      "id": "col:public.total_stat.withdrawal_usd"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "user_daily_kpi",
+      "column": "user_hash_key",
+      "id": "col:public.user_daily_kpi.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "user_daily_kpi",
+      "column": "project_id",
+      "id": "col:public.user_daily_kpi.project_id"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "user_daily_kpi",
+      "column": "date",
+      "id": "col:public.user_daily_kpi.date"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "user_daily_kpi",
+      "column": "deposit_usd",
+      "id": "col:public.user_daily_kpi.deposit_usd"
+    },
+    {
+      "type": "col",
+      "schema": "public",
+      "table": "user_daily_kpi",
+      "column": "withdrawal_usd",
+      "id": "col:public.user_daily_kpi.withdrawal_usd"
+    }
+  ],
+  "links": [
+    {
+      "type": "table_dependency",
+      "source": "tbl:business_vault.br_payment",
+      "target": "tbl:mwl.mysq_payments"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:business_vault.br_payment",
+      "target": "tbl:mwl.users"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.fake"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.project_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.closed_at"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.operation_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.status"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.sum"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.sum_usd"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:public.total_stat",
+      "target": "tbl:public.user_daily_kpi"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:public.total_stat",
+      "target": "tbl:reference.project"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.total_stat",
+      "target": "col:public.total_stat.project_name"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.total_stat",
+      "target": "col:public.total_stat.date"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.total_stat",
+      "target": "col:public.total_stat.deposit_usd"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.total_stat",
+      "target": "col:public.total_stat.withdrawal_usd"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "tbl:business_vault.br_payment"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "col:public.user_daily_kpi.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "col:public.user_daily_kpi.project_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "col:public.user_daily_kpi.date"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "col:public.user_daily_kpi.deposit_usd"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:public.user_daily_kpi",
+      "target": "col:public.user_daily_kpi.withdrawal_usd"
+    }
+  ]
+}
