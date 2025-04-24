@@ -43,13 +43,6 @@
       "type": "col",
       "schema": "business_vault",
       "table": "br_payment",
-      "column": "project_id",
-      "id": "col:business_vault.br_payment.project_id"
-    },
-    {
-      "type": "col",
-      "schema": "business_vault",
-      "table": "br_payment",
       "column": "closed_at",
       "id": "col:business_vault.br_payment.closed_at"
     },
@@ -188,11 +181,6 @@
       "type": "contains_column",
       "source": "tbl:business_vault.br_payment",
       "target": "col:business_vault.br_payment.fake"
-    },
-    {
-      "type": "contains_column",
-      "source": "tbl:business_vault.br_payment",
-      "target": "col:business_vault.br_payment.project_id"
     },
     {
       "type": "contains_column",

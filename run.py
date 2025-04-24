@@ -111,7 +111,6 @@ def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
          raise ValueError(f"Cannot parse node ID: Unknown type '{node_type}' in {node_id}")
 
 # --- Функции работы с файлами и SQL ---
-
 def find_sql_files(directory: Path) -> List[Path]:
     """Рекурсивно находит все файлы .sql в указанной директории."""
     logger.info(f"Поиск SQL файлов в: {directory}")
@@ -596,7 +595,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     graph.add_edge(model_id, target_col_id, type='contains_column')
                     logger.debug(f"Добавлен узел/ребро для колонки: {target_col_id}")
 
-                    # --- Lineage Analysis (ИСПРАВЛЕННЫЙ ВЫЗОВ) ---
+                    # --- Lineage Analysis ---
                     lineage_target_column = col_name # Используем имя колонки как цель для lineage
                     lineage_sql_statement = main_statement # Весь INSERT или CREATE AS SELECT
 
@@ -707,7 +706,6 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
     return graph, known_models
 
 # --- Функции сохранения/загрузки и сравнения графов ---
-
 def save_graph_state(graph: nx.DiGraph, state_file: Path):
     """Сохраняет граф в JSON файл."""
     logger.info(f"Сохранение состояния графа в {state_file}...")
@@ -838,35 +836,7 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
     logger.info(f"Найдено {len(affected['tables'])} зависимых таблиц и {len(affected['columns'])} зависимых колонок для '{search_node_id}'.")
     return affected
 
-def main():
-    logger.info("="*50)
-    logger.info("Запуск анализатора зависимостей SQL моделей...")
-    logger.info(f"Используется директория моделей: {config.SQL_MODELS_DIR}")
-    logger.info(f"Файл состояния: {config.STATE_FILE}")
-    logger.info(f"Нормализация имен: {NORMALIZE_NAMES}")
-    logger.info(f"SQL диалект: {getattr(config, 'SQL_DIALECT', 'Не указан')}")
-    logger.info("="*50)
-
-    if not config.SQL_MODELS_DIR.is_dir():
-        logger.error(f"Папка с SQL моделями не найдена: {config.SQL_MODELS_DIR}")
-        logger.error("Проверьте путь в config.py и убедитесь, что папка существует.")
-        return
-
-    sql_files = find_sql_files(config.SQL_MODELS_DIR)
-    if not sql_files:
-        logger.warning("Не найдено SQL файлов для анализа.")
-        if not Path(config.STATE_FILE).exists():
-            logger.info("Создание пустого файла состояния.")
-            save_graph_state(nx.DiGraph(), Path(config.STATE_FILE))
-        logger.info("Завершение работы.")
-        return
-
-    # 1. Загружаем предыдущее состояние
-    previous_graph = load_graph_state(config.STATE_FILE)
-
-    # 2. Строим текущее состояние
-    current_graph, _ = build_dependency_graph(sql_files, config.SQL_MODELS_DIR)
-
+def find_significat_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGraph):
     # 3. Сравниваем состояния и анализируем ИМПАКТ УДАЛЕНИЙ/ИЗМЕНЕНИЙ
     if previous_graph:
         logger.info("-" * 30)
@@ -997,6 +967,37 @@ def main():
 
     else:
         logger.info("Предыдущее состояние не найдено, сравнение и анализ влияния не выполняются.")
+
+def main():
+    logger.info("="*50)
+    logger.info("Запуск анализатора зависимостей SQL моделей...")
+    logger.info(f"Используется директория моделей: {config.SQL_MODELS_DIR}")
+    logger.info(f"Файл состояния: {config.STATE_FILE}")
+    logger.info(f"Нормализация имен: {NORMALIZE_NAMES}")
+    logger.info(f"SQL диалект: {getattr(config, 'SQL_DIALECT', 'Не указан')}")
+    logger.info("="*50)
+
+    if not config.SQL_MODELS_DIR.is_dir():
+        logger.error(f"Папка с SQL моделями не найдена: {config.SQL_MODELS_DIR}")
+        logger.error("Проверьте путь в config.py и убедитесь, что папка существует.")
+        return
+
+    sql_files = find_sql_files(config.SQL_MODELS_DIR)
+    if not sql_files:
+        logger.warning("Не найдено SQL файлов для анализа.")
+        if not Path(config.STATE_FILE).exists():
+            logger.info("Создание пустого файла состояния.")
+            save_graph_state(nx.DiGraph(), Path(config.STATE_FILE))
+        logger.info("Завершение работы.")
+        return
+
+    # 1. Загружаем предыдущее состояние
+    previous_graph = load_graph_state(config.STATE_FILE)
+
+    # 2. Строим текущее состояние
+    current_graph, _ = build_dependency_graph(sql_files, config.SQL_MODELS_DIR)
+
+    find_significat_changes(previous_graph, current_graph)
 
     # 4. Сохранить текущее состояние графа
     save_graph_state(current_graph, config.STATE_FILE)
