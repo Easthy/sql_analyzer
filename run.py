@@ -374,7 +374,7 @@ def resolve_table_alias(source_table_alias: Optional[str],
     logger.warning(f"Failed to resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias})")
     return None, None
 
-def build_column_dependency_grapth(model_id: str, col_name: str, main_statement: sqlglot.exp.Insert):
+def build_column_dependency_grapth(graph: nx.classes.digraph.DiGraph, model_id: str, col_name: str, main_statement: sqlglot.exp.Insert):
     """
     Calculates the dependencies of columns on each other
     """
@@ -754,7 +754,8 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     graph.add_edge(model_id, target_col_id, type='contains_column')
                     logger.debug(f"Added node/edge for column: {target_col_id}")
 
-                    build_column_dependency_grapth(model_id, col_name, main_statement)
+                    # Add edges between columns
+                    build_column_dependency_grapth(graph, model_id, col_name, main_statement)
 
                 except (ValueError, KeyError) as e:
                     logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
