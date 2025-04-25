@@ -435,40 +435,10 @@ def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: s
             f"Lineage did not return a result for column '{col_name}' in {model_id}."
         )
 
-
-def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
-    """
-    Builds a dependency graph of models and columns
-    """
-    graph = nx.DiGraph()
-    known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
-    model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
-
-    # 1. Model Identification by Files
-    logger.info("--- Phase 1: Model Identification ---")
-    for file_path in sql_files:
-        schema, table_name = extract_model_name_from_path(file_path, root_dir)
-        if schema and table_name:
-            try:
-                model_id = format_node_id(TBL_PREFIX, schema, table_name)
-                if model_id in model_definitions:
-                    logger.warning(
-                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
-                        f"Using the latest one: {file_path.name}"
-                    )
-                known_models.add(model_id)
-                model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema, "orig_table_name": table_name}
-            except ValueError as e:
-                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
-        else:
-            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
-
-    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
-
-    # 2. Building the graph: table and column nodes, table/column dependencies
-    logger.info("--- Phase 2: Building the dependency graph ---")
+def process_tables(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, Any]], known_models: Set[str], root_dir: Path):
     processed_files = 0
     total_files = len(model_definitions)
+
     for model_id, model_info in model_definitions.items():
         processed_files += 1
         file_path = model_info["file_path"]
@@ -668,9 +638,11 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                 except Exception as e:
                     logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
 
-    # Column level dependencies (columns depends on columns)
+def process_columns(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, Any]], known_models: Set[str], root_dir: Path):
     logger.warning("Searching for columns dependencies")
     processed_files = 0
+    total_files = len(model_definitions)
+
     for model_id, model_info in model_definitions.items():
         logger.warning(f"processing model {model_id}")
         source_tables_in_query = []
@@ -770,6 +742,43 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
 
             # End of for loop over target_columns
+
+def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
+    """
+    Builds a dependency graph of models and columns
+    """
+    graph = nx.DiGraph()
+    known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
+    model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
+
+    # 1. Model Identification by Files
+    logger.info("--- Phase 1: Model Identification ---")
+    for file_path in sql_files:
+        schema, table_name = extract_model_name_from_path(file_path, root_dir)
+        if schema and table_name:
+            try:
+                model_id = format_node_id(TBL_PREFIX, schema, table_name)
+                if model_id in model_definitions:
+                    logger.warning(
+                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
+                        f"Using the latest one: {file_path.name}"
+                    )
+                known_models.add(model_id)
+                model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema, "orig_table_name": table_name}
+            except ValueError as e:
+                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
+        else:
+            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
+
+    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
+
+    # 2. Building the graph: table and column nodes, table/column dependencies
+    logger.info("--- Phase 2: Building the dependency graph ---")
+
+    process_tables(graph, model_definitions, known_models, root_dir)
+
+    # Column level dependencies (columns depends on columns)
+    process_columns(graph, model_definitions, known_models, root_dir)
 
     logger.info(f"Graph construction completed. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
     return graph, known_models
