@@ -296,81 +296,11 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
 
     return _cols
 
-def resolve_table_alias(source_table_alias: Optional[str],
-                         source_schema_alias: Optional[str],
-                         source_tables_in_query: iter, # Iterator of sqlglot.exp.Table
-                         target_schema: str # Default schema
-                         ) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Attempts to resolve a table/schema alias to the actual schema and table name.
-    Returns a tuple (actual_schema, actual_table_name) or (None, None).
-    """
-    if not source_table_alias:
-        logger.debug("Alias resolution failed: No source table alias provided.")
-        return None, None
-
-    source_table_alias_norm = normalize_name(source_table_alias)
-    source_schema_alias_norm = normalize_name(source_schema_alias)
-    target_schema_norm = normalize_name(target_schema)
-
-    # Create a copy of the iterator to avoid exhausting it on multiple passes
-    source_tables_list = list(source_tables_in_query)
-
-    for table_expr in source_tables_list:
-        if not isinstance(table_expr, sqlglot.exp.Table): continue
-
-        current_table_name = table_expr.name
-        current_schema_name = table_expr.db
-        current_alias = table_expr.alias
-
-        current_table_name_norm = normalize_name(current_table_name)
-        current_schema_name_norm = normalize_name(current_schema_name) # Schema from expression
-        current_alias_norm = normalize_name(current_alias)
-
-        # Determine the "effective" schema for the current table in the query
-        effective_schema_norm = current_schema_name_norm if current_schema_name_norm else target_schema_norm
-
-        match = False
-        # 1. Comparison with the table alias
-        if current_alias_norm and current_alias_norm == source_table_alias_norm:
-            # If a schema is specified in the column (source_schema_alias_norm), it must match the alias's effective schema
-            if source_schema_alias_norm is None or effective_schema_norm == source_schema_alias_norm:
-                match = True
-        # 2. Comparison with the table name (if table_expr has no alias)
-        elif not current_alias and current_table_name_norm == source_table_alias_norm:
-            # If a schema is specified in the column (source_schema_alias_norm), it must match the table's effective schema
-            if source_schema_alias_norm is None or effective_schema_norm == source_schema_alias_norm:
-                match = True
-
-        if match:
-            actual_table_name = current_table_name # Original table name
-            actual_schema = current_schema_name if current_schema_name else target_schema # Original or target
-            logger.debug(f"Resolved alias/table '{source_table_alias}' (schema hint: {source_schema_alias}) -> {actual_schema}.{actual_table_name} (based on: {table_expr.sql()})")
-            return actual_schema, actual_table_name
-
-    # If no direct match was found in FROM/JOIN
-    logger.debug(f"Could not directly resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias}) in query sources: {[t.sql() for t in source_tables_list]}")
-
-    # Fallback: if the schema in the column is NOT specified, and the name matches a table name (without alias) from the FROM clause
-    # This can catch cases like `SELECT t1.col FROM table1 t1 JOIN table2 ON ...` where the lineage includes `table2.col`
-    if source_schema_alias is None:
-         for table_expr in source_tables_list:
-             if not isinstance(table_expr, sqlglot.exp.Table): continue
-             # If the table name matches and it has no alias
-             if normalize_name(table_expr.name) == source_table_alias_norm and not table_expr.alias:
-                 actual_table_name = table_expr.name
-                 actual_schema = table_expr.db if table_expr.db else target_schema
-                 logger.debug(f"Fallback resolution for '{source_table_alias}' -> {actual_schema}.{actual_table_name} (unaliased table match)")
-                 return actual_schema, actual_table_name
-
-    logger.warning(f"Failed to resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias})")
-    return None, None
-
-def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: str, col_name: str, target_col_id: str, main_statement: sqlglot.exp.Insert):
+def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert):
     """
     Calculates the dependencies of columns on each other
     """
-
+    col_name = target_col_id.split(':')[1].split('.')[2]
     # --- Lineage Analysis ---
     lineage_target_column = col_name  # Use the column name as the lineage target
     lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
@@ -735,7 +665,7 @@ def process_columns(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, An
                     parsed_target_id_info = parse_node_id(model_id)
                     target_col_id = format_node_id(COL_PREFIX, parsed_target_id_info['schema'], parsed_target_id_info['table'], col_name)
                     # Add edges between columns
-                    build_column_dependency_graph(graph, model_id, col_name, target_col_id, main_statement)
+                    build_column_dependency_graph(graph, model_id, target_col_id, main_statement)
                 except (ValueError, KeyError) as e:
                     logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
                 except Exception as e:
