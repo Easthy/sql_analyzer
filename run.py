@@ -778,6 +778,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
     process_tables(graph, model_definitions, known_models, root_dir)
 
     # Column level dependencies (columns depends on columns)
+    # We have to process column edges after all tables have been connected to their columns, otherwise some columns won't be connected to their source columns
     process_columns(graph, model_definitions, known_models, root_dir)
 
     logger.info(f"Graph construction completed. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
