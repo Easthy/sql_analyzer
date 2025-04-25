@@ -281,6 +281,16 @@
     },
     {
       "type": "column_dependency",
+      "source": "col:public.total_stat.deposit_usd",
+      "target": "col:public.user_daily_kpi.deposit_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.withdrawal_usd",
+      "target": "col:public.user_daily_kpi.withdrawal_usd"
+    },
+    {
+      "type": "column_dependency",
       "source": "col:public.user_daily_kpi.user_hash_key",
       "target": "col:business_vault.br_payment.user_hash_key"
     },
@@ -297,22 +307,22 @@
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.deposit_usd",
-      "target": "col:business_vault.br_payment.operation_id"
+      "target": "col:business_vault.br_payment.sum_usd"
     },
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.deposit_usd",
-      "target": "col:business_vault.br_payment.sum_usd"
-    },
-    {
-      "type": "column_dependency",
-      "source": "col:public.user_daily_kpi.withdrawal_usd",
       "target": "col:business_vault.br_payment.operation_id"
     },
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.withdrawal_usd",
       "target": "col:business_vault.br_payment.sum_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.user_daily_kpi.withdrawal_usd",
+      "target": "col:business_vault.br_payment.operation_id"
     }
   ]
 }

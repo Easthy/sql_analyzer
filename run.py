@@ -239,29 +239,18 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
 
     return main_statement
 
-def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, dialect: str) -> List[sqlglot.exp.Column]:
+def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col_id: str) -> List[sqlglot.exp.Column]:
     """
     Recursively traverses the lineage Node tree and collects all
     sqlglot.exp.Column expressions that represent terminal sources
     (i.e., leaf Column nodes in the lineage tree with table information).
-    source_col_id = format_node_id(
-        COL_PREFIX,
-        'business_vault',
-        'br_payment',
-        'sum_usd',
-    )
-    target_col_id = format_node_id(
-        COL_PREFIX,
-        'public',
-        'user_daily_kpi',
-        'deposit_usd',
-    )
-    graph.add_edge(
-        target_col_id, source_col_id, type="column_dependency"
-    )
     """
     sources: List[sqlglot.exp.Column] = []
     processed_node_ids = set()
+
+    target_col_name = target_col_id.split(':')[1].split('.')[2]
+
+    # logger.debug(node)
 
     _cols = []
     def traverse(current_node: LineageNode):
@@ -269,6 +258,7 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
         if node_id in processed_node_ids:
             return
         processed_node_ids.add(node_id)
+        table_schema = str(current_node.source).split('.')[0]
 
         # Compare normalized names to avoid accidentally adding the target itself as a source
         # (even though lineage usually doesn't return it as a leaf)
@@ -278,14 +268,16 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
         is_leaf_node = not current_node.downstream
 
         if is_leaf_node:
+            table_name = current_node.name.split('.')[0]
+            column = current_node.name.split('.')[1]
             # If the leaf node is itself a column (and not the target)
             source_col_id = format_node_id(
                 node_type=COL_PREFIX,
-                schema=str(current_node.source).split('.')[0],
-                name=current_node.name.split('.')[0],
-                column=current_node.name.split('.')[1]
+                schema=table_schema,
+                name=table_name,
+                column=column
             )
-            logger.debug(f"Found {source_col_id} column as source for the {target_col_name}")
+            logger.debug(f"Found {source_col_id} column as source for the {target_col_id}")
             _cols.append(source_col_id)
 
         # Recursively traverse child nodes (downstream dependencies)
@@ -299,7 +291,7 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
 
     # Log the discovered sources
     if _cols:
-        logger.debug(f"Found source columns for target '{target_col_name}': {_cols}")
+        logger.debug(f"Found source columns for the target '{target_col_id}': {_cols}")
 
     return _cols
 
@@ -412,8 +404,8 @@ def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: s
             sqlglot.exp.Column
         ] = find_source_columns_from_lineage(
             lineage_result_node,
-            lineage_target_column,  # Name of the target column for comparison
             getattr(config, "SQL_DIALECT", None),
+            target_col_id  # ID of the target column for comparison
         )
 
         # Processing the found source columns
@@ -670,13 +662,112 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     graph.add_edge(model_id, target_col_id, type='contains_column')
                     logger.debug(f"Added node/edge for column: {target_col_id}")
 
-                    # Add edges between columns
-                    build_column_dependency_graph(graph, model_id, col_name, target_col_id, main_statement)
-
                 except (ValueError, KeyError) as e:
                     logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
                 except Exception as e:
                     logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
+
+    # Column level dependencies
+    logger.warning("Searching for columns dependencies")
+    processed_files = 0
+    for model_id, model_info in model_definitions.items():
+        logger.warning(f"processing model {model_id}")
+        source_tables_in_query = []
+
+        ###
+        processed_files += 1
+        file_path = model_info["file_path"]
+        target_schema = model_info["orig_schema"]
+        target_table = model_info["orig_table_name"]
+        relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
+
+        logger.info(f"[{processed_files}/{total_files}] Analyzing: {relative_path} (Model: {target_schema}.{target_table})")
+
+        try:
+            sql_content = file_path.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.error(f"Error reading file {file_path}: {e}")
+            continue
+
+        # Find the main statement (INSERT/CREATE)
+        main_statement = find_main_statement(sql_content, target_schema, target_table)
+        if not main_statement:
+            logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
+            continue
+        ###
+
+        #!!! main_statement
+        try:
+            # Find all tables used, excluding CTEs defined within the main statement
+            all_tables = list(main_statement.find_all(sqlglot.exp.Table))
+            # Searching for CTE
+            ctes_in_scope = set()
+            with_scope = main_statement.find(sqlglot.exp.With)
+            if with_scope:
+                # Normalize CTE names for comparison
+                ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if cte.alias_or_name}
+
+            # Filter tables, keeping only those that are not CTEs
+            source_tables_in_query = [
+                tbl for tbl in all_tables
+                if normalize_name(tbl.name) not in ctes_in_scope
+            ]
+            if ctes_in_scope:
+                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model_id}")
+
+        except Exception as e:
+            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
+
+        for table_expr in source_tables_in_query:
+            # The code for extracting target_columns and select_expressions remains unchanged
+            select_part = None
+            if isinstance(main_statement, sqlglot.exp.Insert):
+                if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
+                     select_part = main_statement.expression.find(sqlglot.exp.Select)
+                target_col_names_explicit = []
+                target_spec = main_statement.this
+                # Handle cases like INSERT INTO schema.table (col1, col2)
+                columns_in_target = None
+                if isinstance(target_spec, sqlglot.exp.Schema) and target_spec.expressions:
+                    columns_in_target = target_spec.expressions
+                # Handle cases like INSERT INTO table (col1, col2)
+                elif isinstance(target_spec, sqlglot.exp.Tuple): # Often used for column lists
+                    columns_in_target = target_spec.expressions
+
+                if columns_in_target:
+                     target_col_names_explicit = [col.name for col in columns_in_target if isinstance(col, sqlglot.exp.Identifier)]
+
+                if target_col_names_explicit:
+                    target_columns = target_col_names_explicit
+                    if select_part:
+                        select_expressions = select_part.expressions
+                elif select_part:
+                    target_columns = [col.alias_or_name for col in select_part.expressions]
+                    select_expressions = select_part.expressions
+
+            elif isinstance(main_statement, sqlglot.exp.Create):
+                query_expression = main_statement.expression
+                if isinstance(query_expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
+                     select_part = query_expression.find(sqlglot.exp.Select)
+
+                if select_part:
+                    target_columns = [col.alias_or_name for col in select_part.expressions]
+                    select_expressions = select_part.expressions
+
+            original_len = len(target_columns)
+            target_columns = [col for col in target_columns if isinstance(col, str)]
+
+            for i, col_name in enumerate(target_columns):
+                try:
+                    parsed_target_id_info = parse_node_id(model_id)
+                    target_col_id = format_node_id(COL_PREFIX, parsed_target_id_info['schema'], parsed_target_id_info['table'], col_name)
+                    # Add edges between columns
+                    build_column_dependency_graph(graph, model_id, col_name, target_col_id, main_statement)
+                except (ValueError, KeyError) as e:
+                    logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
+
             # End of for loop over target_columns
 
     logger.info(f"Graph construction completed. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
