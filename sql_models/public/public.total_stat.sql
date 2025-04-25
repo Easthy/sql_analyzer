@@ -17,7 +17,7 @@ WITH _projects AS (
       FROM reference.project
 )
   SELECT _projects.project_name,
-         user_daily_kpi.closed_at::date AS date,
+         user_daily_kpi.date AS date,
          SUM(user_daily_kpi.deposit_usd) AS deposit_usd,
          SUM(user_daily_kpi.withdrawal_usd) AS withdrawal_usd
     FROM public.user_daily_kpi

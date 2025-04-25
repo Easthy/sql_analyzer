@@ -258,7 +258,6 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
         if node_id in processed_node_ids:
             return
         processed_node_ids.add(node_id)
-        table_schema = str(current_node.source).split('.')[0]
 
         # Compare normalized names to avoid accidentally adding the target itself as a source
         # (even though lineage usually doesn't return it as a leaf)
@@ -268,8 +267,10 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
         is_leaf_node = not current_node.downstream
 
         if is_leaf_node:
+            table_schema = str(current_node.source).split('.')[0]
             table_name = current_node.name.split('.')[0]
             column = current_node.name.split('.')[1]
+
             # If the leaf node is itself a column (and not the target)
             source_col_id = format_node_id(
                 node_type=COL_PREFIX,
@@ -505,7 +506,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
             logger.error(f"Error parsing or adding model node {model_id}: {e}")
             continue
 
-        # --- Table-level dependencies ---
+        # Table-level dependencies
         source_tables_in_query = []
         try:
             # Find all tables used, excluding CTEs defined within the main statement
@@ -554,7 +555,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                 continue
             processed_upstream_models.add(upstream_model_id)
 
-            # Add source node
+            # Add source node (table)
             if not graph.has_node(upstream_model_id):
                 is_known = upstream_model_id in known_models
                 source_type = 'model' if is_known else 'source_table'
@@ -572,13 +573,13 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                      logger.error(f"Error adding source node {upstream_model_id}: {e}")
                      continue # Skipping edge
 
-            # Adding dependency edge
+            # Adding dependency edge (table depends on other table)
             if graph.has_node(upstream_model_id):
                 graph.add_edge(model_id, upstream_model_id, type='table_dependency')
                 logger.debug(f"Table dependency added: {model_id} -> {upstream_model_id}")
 
 
-        # --- Column dependency analysis ---
+        # --- Adding columns' nodes to tables ---
         target_columns: List[str] = []
         select_expressions: List[Expression] = []
 
@@ -667,7 +668,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                 except Exception as e:
                     logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
 
-    # Column level dependencies
+    # Column level dependencies (columns depends on columns)
     logger.warning("Searching for columns dependencies")
     processed_files = 0
     for model_id, model_info in model_definitions.items():
@@ -806,7 +807,7 @@ def save_graph_state(graph: nx.DiGraph, state_file: Path):
 
 def load_graph_state(state_file: Path) -> Optional[nx.DiGraph]:
     """Loads a graph from a JSON file."""
-    state_file_path = Path(state_file) # Убедимся, что это Path объект
+    state_file_path = Path(state_file) # Verifying Path object
     if not state_file_path.exists():
         logger.info(f"State file {state_file_path} not found. No previous state available.")
         return None

@@ -23,7 +23,7 @@ SQL_FILE_EXTENSION = ".sql"
 
 # Настройки логирования
 LOG_LEVEL = "INFO"
-LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+LOG_FORMAT = '%(levelname)s - %(message)s'
 
 # --- Проверка существования папки ---
 # Раскомментируйте, если хотите проверку при импорте конфига
