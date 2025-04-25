@@ -2,33 +2,25 @@
 import os
 from pathlib import Path
 
-# Корень проекта (предполагаем, что config.py находится в корне или рядом)
+# Project root (assuming config.py is located at or near the root)
 # BASE_DIR = Path(__file__).resolve().parent
-# Если скрипт будет запускаться из другого места, лучше задать абсолютный путь
-# или путь относительно места запуска. Давайте сделаем его настраиваемым.
-# Укажите АБСОЛЮТНЫЙ путь к папке с вашими SQL моделями
-# Пример: SQL_MODELS_DIR = Path("/path/to/your/sql_models")
-# Или относительный путь от места запуска скрипта:
-SQL_MODELS_DIR = Path("./sql_models") # Пример относительного пути
+# If the script will be run from a different location, it's better to set an absolute path
+# or a path relative to the execution location. Let's make it configurable.
+# Specify the ABSOLUTE path to the folder containing your SQL models
+# Example: SQL_MODELS_DIR = Path("/path/to/your/sql_models")
+# Or a relative path from where the script is executed:
+SQL_MODELS_DIR = Path("./sql_models")  # Example of a relative path
 
-# Файл для сохранения состояния графа зависимостей
+# File to save the dependency graph state
 STATE_FILE = Path("./dependency_state.json")
 
-# Диалект SQL (важно для корректного парсинга)
-# Примеры: "postgres", "mysql", "snowflake", "bigquery", "clickhouse"
+# SQL dialect (important for correct parsing)
+# Examples: "postgres", "mysql", "snowflake", "bigquery", "clickhouse"
 SQL_DIALECT = "redshift"
 
-# Расширение файлов с моделями
+# File extension for SQL model files
 SQL_FILE_EXTENSION = ".sql"
 
-# Настройки логирования
+# Logging settings
 LOG_LEVEL = "INFO"
 LOG_FORMAT = '%(levelname)s - %(message)s'
-
-# --- Проверка существования папки ---
-# Раскомментируйте, если хотите проверку при импорте конфига
-# if not SQL_MODELS_DIR.is_dir():
-#     raise FileNotFoundError(
-#         f"Папка с SQL моделями не найдена: {SQL_MODELS_DIR}. "
-#         f"Проверьте путь в config.py"
-#     )
