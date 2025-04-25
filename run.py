@@ -20,7 +20,7 @@ from rich.text import Text
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning) # Suppress pandas future warning from networkx/json
 
-# --- Импорт config ---
+# --- config ---
 try:
     import config
 except ImportError:
@@ -31,14 +31,14 @@ except Exception as e: # Catch broader errors during config import/access
     print(f"Ошибка при импорте или доступе к config.py: {e}")
     exit(1)
 
-# --- Проверка наличия необходимых атрибутов в config ---
+# --- Checking for the presence of required attributes in config ---
 required_configs = ['SQL_MODELS_DIR', 'STATE_FILE', 'SQL_DIALECT', 'SQL_FILE_EXTENSION']
 missing_configs = [cfg for cfg in required_configs if not hasattr(config, cfg)]
 if missing_configs:
     print(f"Ошибка: В config.py отсутствуют следующие обязательные параметры: {', '.join(missing_configs)}")
     exit(1)
 
-# --- Логирование и Константы ---
+# --- Logging and Constants ---
 # Ensure directory for state file exists
 config.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -55,16 +55,15 @@ COL_PREFIX = "col"
 # Default to True if NORMALIZE_NAMES not in config
 NORMALIZE_NAMES = getattr(config, 'NORMALIZE_NAMES', True)
 
-# --- Утилиты для имен и ID ---
-
+# --- Utilities for Names and IDs ---
 def normalize_name(name: Optional[str]) -> Optional[str]:
-    """Приводит имя к нижнему регистру, если включена нормализация."""
+    """Converts the name to lowercase if normalization is enabled"""
     if NORMALIZE_NAMES and name:
         return name.lower()
     return name
 
 def format_node_id(node_type: str, schema: Optional[str], name: Optional[str], column: Optional[str] = None) -> str:
-    """Формирует уникальный ID для узла графа с опциональной нормализацией."""
+    """Generates a unique ID for a graph node with optional normalization"""
     schema_norm = normalize_name(schema if schema else 'unknown_schema')
     name_norm = normalize_name(name if name else 'unknown_table')
 
@@ -81,7 +80,7 @@ def format_node_id(node_type: str, schema: Optional[str], name: Optional[str], c
         raise ValueError(f"Unknown node type: {node_type}")
 
 def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
-    """Разбирает ID узла на компоненты."""
+    """Parses the node ID into components"""
     if not isinstance(node_id, str):
         raise ValueError(f"Cannot parse node ID: Expected string, got {type(node_id)} ({node_id})")
 
@@ -110,26 +109,29 @@ def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
     else:
          raise ValueError(f"Cannot parse node ID: Unknown type '{node_type}' in {node_id}")
 
-# --- Функции работы с файлами и SQL ---
+# --- File and SQL handling functions ---
 def find_sql_files(directory: Path) -> List[Path]:
     """Рекурсивно находит все файлы .sql в указанной директории."""
-    logger.info(f"Поиск SQL файлов в: {directory}")
+    logger.info(f"Searching for SQL files in: {directory}")
     sql_files = list(directory.rglob(f"*{getattr(config, 'SQL_FILE_EXTENSION', '.sql')}"))
-    logger.info(f"Найдено {len(sql_files)} SQL файлов.")
+    logger.info(f"Found {len(sql_files)} SQL files.")
     if not sql_files:
-         logger.warning(f"В директории {directory} не найдено файлов с расширением {getattr(config, 'SQL_FILE_EXTENSION', '.sql')}")
+        logger.warning(f"В директории {directory} не найдено файлов с расширением {getattr(config, 'SQL_FILE_EXTENSION', '.sql')}")
     return sql_files
 
 def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optional[str], Optional[str]]:
     """
-    Извлекает имя модели (schema.table) из пути к файлу.
-    Использует имя файла как 'schema.table_name.sql'.
+    Extracts the model name (schema.table) from the file path.
+    Uses the file name in the format 'schema.table_name.sql
     """
     filename_stem = file_path.stem
     name_parts = filename_stem.split('.')
 
     if len(name_parts) < 2:
-        logger.warning(f"Не удалось определить схему и таблицу из имени файла: {file_path.name}. Имя должно быть в формате 'schema.table.sql'. Пропускается.")
+        logger.warning(
+            f"Не удалось определить схему и таблицу из имени файла: '{file_path.name}'. "
+            f"Ожидаемый формат: 'schema.table.sql'. Файл будет пропущен."
+        )
         return None, None
 
     schema = name_parts[0]
@@ -141,13 +143,13 @@ def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optio
 
 def find_main_statement(sql_content: str, target_schema: str, target_table: str) -> Optional[Expression]:
     """
-    Парсит SQL и находит 'основной' стейтмент (INSERT или CREATE), определяющий целевую таблицу.
+    Parses the SQL and finds the 'main' statement (INSERT or CREATE) that defines the target table
     """
     expressions: List[Expression] = []
     try:
         expressions = sqlglot.parse(sql_content, read=getattr(config, 'SQL_DIALECT', None))
     except ParseError as e:
-        logger.error(f"Ошибка парсинга SQL для {target_schema}.{target_table}: {e}")
+        logger.error(f"SQL parsing error for {target_schema}.{target_table}: {e}")
         # Log detailed parsing errors
         if hasattr(e, 'errors') and e.errors:
             for error_info in e.errors:
@@ -158,18 +160,18 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
                 context_start = max(0, start - 50)
                 context_end = min(len(sql_content), end + 50)
                 problem_sql = sql_content[context_start:context_end]
-                logger.error(f"  Ошибка: {error_info.get('description')} (строка ~{line}, столбец ~{col})")
-                logger.error(f"  Контекст: ...{problem_sql}...")
+                logger.error(f"  Error: {error_info.get('description')} (row ~{line}, column ~{col})")
+                logger.error(f"  Context: ...{problem_sql}...")
         else:
-             logger.error("  Детали ошибки парсинга недоступны.")
+             logger.error("  Parsing error details are unavailable")
         return None
     except Exception as e:
-        logger.error(f"Неожиданная ошибка при парсинге SQL для {target_schema}.{target_table}: {e}")
-        logger.debug(f"SQL контент (начало):\n{sql_content[:500]}...")
+        logger.error(f"Unexpected error while parsing SQL for {target_schema}.{target_table}: {e}")
+        logger.debug(f"SQL context (the beginning):\n{sql_content[:500]}...")
         return None
 
     if not expressions:
-        logger.warning(f"Не найдено SQL выражений в файле для {target_schema}.{target_table}")
+        logger.warning(f"No SQL statements found in file for {target_schema}.{target_table}")
         return None
 
     main_statement = None
@@ -207,10 +209,10 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
 
                 if table_name_norm == target_table_norm and schema_name_norm == target_schema_norm:
                     main_statement = expr
-                    logger.debug(f"Найдено INSERT выражение для {target_schema}.{target_table}")
+                    logger.debug(f"Found INSERT statement for {target_schema}.{target_table}")
                     break
                 else:
-                    logger.debug(f"Найден INSERT в таблицу '{schema_name}.{table_name}', но не совпадает с целевой '{target_schema}.{target_table}'.")
+                    logger.debug(f"Found INSERT in the table '{schema_name}.{table_name}', but does not match the target '{target_schema}.{target_table}'.")
 
         elif isinstance(expr, (sqlglot.exp.Create)):
             target_create_expr = expr.this
@@ -232,26 +234,26 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
 
                 if table_name_norm == target_table_norm and schema_name_norm == target_schema_norm:
                     main_statement = expr
-                    logger.debug(f"Найдено CREATE {kind} выражение для {target_schema}.{target_table}")
+                    logger.debug(f"Found CREATE {kind} statement for {target_schema}.{target_table}")
                     break
                 else:
-                    logger.debug(f"Найден CREATE {kind} для '{schema_name}.{table_name}', но не совпадает с целевой '{target_schema}.{target_table}'.")
+                    logger.debug(f"Found CREATE {kind} for '{schema_name}.{table_name}', but does not match the target '{target_schema}.{target_table}'.")
 
     if not main_statement:
-         logger.warning(f"Не найдено основное INSERT/CREATE TABLE/VIEW выражение для {target_schema}.{target_table} в файле.")
+         logger.warning(f"No main INSERT/CREATE TABLE/VIEW statement found for... {target_schema}.{target_table} в файле.")
          # Optionally, try to find the *last* SELECT statement as a fallback? Risky.
          # last_select = next((e for e in reversed(expressions) if isinstance(e, exp.Select)), None)
          # if last_select:
-         #    logger.warning("Используем последний SELECT как основное выражение (может быть неточно)")
+         #    logger.warning("Using the last SELECT as the main statement")
          #    main_statement = last_select
 
     return main_statement
 
 def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, dialect: str) -> List[sqlglot.exp.Column]:
     """
-    Рекурсивно обходит дерево lineage Node и собирает все выражения
-    sqlglot.exp.Column, которые представляют собой конечные источники
-    (листовые узлы типа Column в дереве lineage с информацией о таблице).
+    Recursively traverses the lineage Node tree and collects all
+    sqlglot.exp.Column expressions that represent terminal sources
+    (i.e., leaf Column nodes in the lineage tree with table information).
     """
     sources: List[sqlglot.exp.Column] = []
     processed_node_ids = set() # Для предотвращения циклов
@@ -262,43 +264,43 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
             return
         processed_node_ids.add(node_id)
 
-        # Сравниваем нормализованные имена, чтобы не добавить саму цель как источник случайно
-        # (хотя lineage обычно ее не возвращает в листьях)
+        # Compare normalized names to avoid accidentally adding the target itself as a source
+        # (even though lineage usually doesn't return it as a leaf)
         is_target_node = normalize_name(current_node.name) == normalize_name(target_col_name)
 
-        # Проверяем, является ли текущий узел листовым в дереве lineage
+        # Check if the current node is a leaf in the lineage tree
         is_leaf_node = not current_node.downstream
 
         if is_leaf_node:
-            # Если листовой узел сам является колонкой (и не целевой)
+            # If the leaf node is itself a column (and not the target)
             if isinstance(current_node.expression, sqlglot.exp.Column) and not is_target_node:
-                # Добавляем, ТОЛЬКО если есть информация об источнике (table/alias)
+                # Add ONLY if source information (table/alias) is available
                 source_expr = current_node.expression
                 if source_expr.table:
                     sources.append(source_expr)
                 else:
-                    # Логируем колонки без таблицы, которые пропускаем
-                    logger.debug(f"Пропуск листовой колонки-источника '{source_expr.sql(dialect=dialect)}' без имени таблицы/алиаса в lineage для '{target_col_name}'.")
-            else: # Листовой узел не колонка (например, литерал, функция без колонок)
-                logger.debug(f"Листовой узел lineage для '{target_col_name}' не является Column: {type(current_node.expression)} [{current_node.name}]")
+                    # Log columns without a table that are being skipped
+                    logger.debug(f"Skipping a leaf node that is a source column '{source_expr.sql(dialect=dialect)}' without table name/alias in the lineage for '{target_col_name}'.")
+            else: # Leaf node is not a column (e.g., a literal or a function without columns)
+                logger.debug(f"Lead node lineage for '{target_col_name}' is not Column: {type(current_node.expression)} [{current_node.name}]")
 
-        # Рекурсивно обходим дочерние узлы ("downstream" зависимости)
-        # Источники могут быть только в листьях дерева lineage
+        # Recursively traverse child nodes (downstream dependencies)
+        # Sources can only appear at the leaf nodes of the lineage tree
         for child_node in current_node.downstream:
             traverse(child_node)
 
-    # Начинаем обход с корневого узла, который вернул lineage()
+    # Start traversal from the root node returned by lineage()
     if node:
         traverse(node)
 
-    # Убираем дубликаты объектов Column (на всякий случай)
+    # Remove duplicate Column objects (just in case)
     unique_sources_dict = {id(expr): expr for expr in sources}
     unique_sources = list(unique_sources_dict.values())
 
-    # Логируем найденные источники
+    # Log the discovered sources
     source_sqls = [s.sql(dialect=dialect) for s in unique_sources]
     if source_sqls:
-        logger.debug(f"Найденные конечные колонки-источники для '{target_col_name}': {source_sqls}")
+        logger.debug(f"Found source columns for target '{target_col_name}': {source_sqls}")
 
     return unique_sources
 
@@ -308,8 +310,8 @@ def resolve_table_alias(source_table_alias: Optional[str],
                          target_schema: str # Default schema
                          ) -> Tuple[Optional[str], Optional[str]]:
     """
-    Пытается разрешить алиас таблицы/схемы к реальному имени таблицы и схемы.
-    Возвращает Tuple(actual_schema, actual_table_name) или (None, None).
+    Attempts to resolve a table/schema alias to the actual schema and table name.
+    Returns a tuple (actual_schema, actual_table_name) or (None, None).
     """
     if not source_table_alias:
         logger.debug("Alias resolution failed: No source table alias provided.")
@@ -319,7 +321,7 @@ def resolve_table_alias(source_table_alias: Optional[str],
     source_schema_alias_norm = normalize_name(source_schema_alias)
     target_schema_norm = normalize_name(target_schema)
 
-    # Создаем копию итератора, чтобы не истощить его при многократных вызовах
+    # Create a copy of the iterator to avoid exhausting it on multiple passes
     source_tables_list = list(source_tables_in_query)
 
     for table_expr in source_tables_list:
@@ -333,36 +335,36 @@ def resolve_table_alias(source_table_alias: Optional[str],
         current_schema_name_norm = normalize_name(current_schema_name) # Schema from expression
         current_alias_norm = normalize_name(current_alias)
 
-        # Определяем "эффективную" схему для текущей таблицы в запросе
+        # Determine the "effective" schema for the current table in the query
         effective_schema_norm = current_schema_name_norm if current_schema_name_norm else target_schema_norm
 
         match = False
-        # 1. Сравнение с алиасом таблицы
+        # 1. Comparison with the table alias
         if current_alias_norm and current_alias_norm == source_table_alias_norm:
-            # Если схема в колонке указана (source_schema_alias_norm), она должна совпадать с эффективной схемой алиаса
+            # If a schema is specified in the column (source_schema_alias_norm), it must match the alias's effective schema
             if source_schema_alias_norm is None or effective_schema_norm == source_schema_alias_norm:
                 match = True
-        # 2. Сравнение с именем таблицы (если алиаса нет у table_expr)
+        # 2. Comparison with the table name (if table_expr has no alias)
         elif not current_alias and current_table_name_norm == source_table_alias_norm:
-            # Если схема в колонке указана (source_schema_alias_norm), она должна совпадать с эффективной схемой таблицы
+            # If a schema is specified in the column (source_schema_alias_norm), it must match the table's effective schema
             if source_schema_alias_norm is None or effective_schema_norm == source_schema_alias_norm:
                 match = True
 
         if match:
-            actual_table_name = current_table_name # Оригинальное имя таблицы
-            actual_schema = current_schema_name if current_schema_name else target_schema # Оригинальное или target
+            actual_table_name = current_table_name # Original table name
+            actual_schema = current_schema_name if current_schema_name else target_schema # Original or target
             logger.debug(f"Resolved alias/table '{source_table_alias}' (schema hint: {source_schema_alias}) -> {actual_schema}.{actual_table_name} (based on: {table_expr.sql()})")
             return actual_schema, actual_table_name
 
-    # Если не нашли прямого совпадения в FROM/JOIN
+    # If no direct match was found in FROM/JOIN
     logger.debug(f"Could not directly resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias}) in query sources: {[t.sql() for t in source_tables_list]}")
 
-    # Fallback: Если схема в колонке НЕ была указана, и имя совпадает с именем таблицы (без алиаса) из FROM
-    # Это может поймать случаи типа `SELECT t1.col FROM table1 t1 JOIN table2 ON ...` где в lineage приходит `table2.col`
+    # Fallback: if the schema in the column is NOT specified, and the name matches a table name (without alias) from the FROM clause
+    # This can catch cases like `SELECT t1.col FROM table1 t1 JOIN table2 ON ...` where the lineage includes `table2.col`
     if source_schema_alias is None:
          for table_expr in source_tables_list:
              if not isinstance(table_expr, sqlglot.exp.Table): continue
-             # Если имя таблицы совпадает и у нее нет алиаса
+             # If the table name matches and it has no alias
              if normalize_name(table_expr.name) == source_table_alias_norm and not table_expr.alias:
                  actual_table_name = table_expr.name
                  actual_schema = table_expr.db if table_expr.db else target_schema
@@ -372,35 +374,189 @@ def resolve_table_alias(source_table_alias: Optional[str],
     logger.warning(f"Failed to resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias})")
     return None, None
 
+def build_column_dependency_grapth(model_id: str, col_name: str, main_statement: sqlglot.exp.Insert):
+    """
+    Calculates the dependencies of columns on each other
+    """
+    # --- Lineage Analysis ---
+    lineage_target_column = col_name  # Use the column name as the lineage target
+    lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
+
+    # Get the root node of the lineage tree for the target column
+    lineage_result_node: Optional[LineageNode] = None
+    try:
+        lineage_result_node = sqlglot_lineage(
+            column=lineage_target_column,
+            sql=lineage_sql_statement,
+            dialect=getattr(config, "SQL_DIALECT", None),
+            # schema=... # Schema can be provided for better resolution
+        )
+    except NotImplementedError as nie:
+        logger.warning(
+            f"Lineage is not implemented for the part of the expression related to column '{col_name}' in {model_id}. Error: {nie}"
+        )
+    except KeyError as ke:
+        # Often occurs when sqlglot fails to resolve a column or table name
+        logger.warning(
+            f"KeyError during lineage for column '{col_name}' in {model_id}: {ke}. The name might not have been resolved."
+        )
+    except Exception as e:
+        logger.error(
+            f"Error while executing sqlglot.lineage for column '{col_name}' in {model_id}: {e}",
+            exc_info=False
+        )
+
+    if lineage_result_node:
+        # Searching for source columns in the lineage tree
+        source_column_expressions: List[
+            sqlglot.exp.Column
+        ] = find_source_columns_from_lineage(
+            lineage_result_node,
+            lineage_target_column,  # Name of the target column for comparison
+            getattr(config, "SQL_DIALECT", None),
+        )
+
+        processed_source_col_ids = set()
+        # Processing the found source columns
+        for source_expr in source_column_expressions:
+            source_col_name = source_expr.name
+            source_table_alias = (
+                source_expr.table
+            )  # Table or alias name from the column expression
+            source_schema_alias = source_expr.db  # Schema name from the column expression
+
+            # Resolve table alias/name to the actual table/schema
+            # Pass the source_tables_in_query iterator (tables from FROM/JOIN excluding CTEs)
+            actual_source_schema, actual_source_table_name = resolve_table_alias(
+                source_table_alias,
+                source_schema_alias,
+                iter(source_tables_in_query),
+                target_schema,  # Target table schema as default
+            )
+
+            if actual_source_table_name and actual_source_schema:
+                try:
+                    source_col_id = format_node_id(
+                        COL_PREFIX,
+                        actual_source_schema,
+                        actual_source_table_name,
+                        source_col_name,
+                    )
+
+                    if source_col_id in processed_source_col_ids:
+                        continue
+                    processed_source_col_ids.add(source_col_id)
+
+                    source_col_name_norm = normalize_name(source_col_name)
+                    parsed_source_table_id_info = parse_node_id(
+                        format_node_id(
+                            TBL_PREFIX, actual_source_schema, actual_source_table_name
+                        )
+                    )
+
+                    # Add source column node
+                    if not graph.has_node(source_col_id):
+                        src_col_attrs = {
+                            "type": COL_PREFIX,
+                            "schema": parsed_source_table_id_info["schema"],
+                            "table": parsed_source_table_id_info["table"],
+                            "column": source_col_name_norm,
+                        }
+                        graph.add_node(source_col_id, **src_col_attrs)
+                        logger.debug(
+                            f"Source column node added: {source_col_id}"
+                        )
+
+                        # Edge from source table to its column
+                        upstream_model_id = format_node_id(
+                            TBL_PREFIX,
+                            parsed_source_table_id_info["schema"],
+                            parsed_source_table_id_info["table"],
+                        )
+                        if not graph.has_node(upstream_model_id):
+                            # Add table node if it was missed
+                            is_known = upstream_model_id in known_models
+                            source_type = "model" if is_known else "source_table"
+                            up_attrs = {
+                                "type": TBL_PREFIX,
+                                "schema": parsed_source_table_id_info["schema"],
+                                "name": parsed_source_table_id_info["table"],
+                                "source_type": source_type,
+                            }
+                            graph.add_node(upstream_model_id, **up_attrs)
+                            logger.debug(
+                                f"Missing source node added: {upstream_model_id} (Type: {source_type})"
+                            )
+
+                        if graph.has_node(upstream_model_id) and not graph.has_edge(
+                            upstream_model_id, source_col_id
+                        ):
+                            graph.add_edge(
+                                upstream_model_id, source_col_id, type="contains_column"
+                            )
+                            logger.debug(
+                                f"Added 'contains_column' edge: {upstream_model_id} -> {source_col_id}"
+                            )
+
+                    # Добавляем ребро зависимости колонок: target_col -> source_col
+                    if graph.has_node(source_col_id):
+                        graph.add_edge(
+                            target_col_id, source_col_id, type="column_dependency"
+                        )
+                        logger.debug(
+                            f"Added column dependency: {target_col_id} -> {source_col_id}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to add edge {target_col_id} -> {source_col_id}: source node not found."
+                        )
+
+                except (ValueError, KeyError) as e:
+                    logger.error(
+                        f"Error while processing/adding node/edge for source column {actual_source_schema}.{actual_source_table_name}.{source_col_name}: {e}"
+                    )
+            else:
+                logger.warning(
+                    f"Failed to resolve source for column '{source_expr.sql()}' (from lineage of '{col_name}') in {model_id}. Original alias/table: '{source_table_alias}', schema: '{source_schema_alias}'."
+                )
+        # End of loop over source_column_expressions
+    else:
+        logger.debug(
+            f"Lineage did not return a result for column '{col_name}' in {model_id}."
+        )
+
 
 def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
     """
-    Строит граф зависимостей моделей и колонок.
+    Builds a dependency graph of models and columns
     """
     graph = nx.DiGraph()
     known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
     model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
 
-    # 1. Идентификация моделей по файлам
-    logger.info("--- Фаза 1: Идентификация моделей ---")
+    # 1. Model Identification by Files
+    logger.info("--- Phase 1: Model Identification ---")
     for file_path in sql_files:
         schema, table_name = extract_model_name_from_path(file_path, root_dir)
         if schema and table_name:
             try:
                 model_id = format_node_id(TBL_PREFIX, schema, table_name)
                 if model_id in model_definitions:
-                     logger.warning(f"Дублирующееся определение для модели {model_id} найдено в {file_path.name} и {model_definitions[model_id]['file_path'].name}. Используется последнее: {file_path.name}")
+                    logger.warning(
+                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
+                        f"Using the latest one: {file_path.name}"
+                    )
                 known_models.add(model_id)
                 model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema, "orig_table_name": table_name}
             except ValueError as e:
-                logger.error(f"Ошибка форматирования ID для файла {file_path.name} ({schema}.{table_name}): {e}")
+                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
         else:
-             logger.warning(f"Пропуск файла (не удалось определить модель): {file_path.name}")
+            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
 
-    logger.info(f"Обнаружено {len(known_models)} моделей с SQL определениями.")
+    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
 
-    # 2. Построение графа: узлы таблиц, колонок, зависимости таблиц и колонок
-    logger.info("--- Фаза 2: Построение графа зависимостей ---")
+    # 2. Building the graph: table and column nodes, table/column dependencies
+    logger.info("--- Phase 2: Building the dependency graph ---")
     processed_files = 0
     total_files = len(model_definitions)
     for model_id, model_info in model_definitions.items():
@@ -410,21 +566,21 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
         target_table = model_info["orig_table_name"]
         relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
 
-        logger.info(f"[{processed_files}/{total_files}] Анализ: {relative_path} (Модель: {target_schema}.{target_table})")
+        logger.info(f"[{processed_files}/{total_files}] Analyzing: {relative_path} (Model: {target_schema}.{target_table})")
 
         try:
             sql_content = file_path.read_text(encoding='utf-8')
         except Exception as e:
-            logger.error(f"Ошибка чтения файла {file_path}: {e}")
+            logger.error(f"Error reading file {file_path}: {e}")
             continue
 
-        # Находим основное выражение (INSERT/CREATE)
+        # Find the main statement (INSERT/CREATE)
         main_statement = find_main_statement(sql_content, target_schema, target_table)
         if not main_statement:
-            logger.warning(f"Пропуск {model_id}, не найдено основное выражение INSERT/CREATE.")
+            logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
             continue
 
-        # Добавляем узел для текущей модели (таблицы)
+        # Add a node for the current model (table)
         try:
             parsed_model_id_info = parse_node_id(model_id)
             node_attrs = {
@@ -435,33 +591,33 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                 "file_path": relative_path
             }
             graph.add_node(model_id, **node_attrs)
-            logger.debug(f"Добавлен узел модели: {model_id}")
+            logger.debug(f"Model node added: {model_id}")
         except (ValueError, KeyError) as e:
-            logger.error(f"Ошибка парсинга или добавления узла модели {model_id}: {e}")
+            logger.error(f"Error parsing or adding model node {model_id}: {e}")
             continue
 
-        # --- Зависимости на уровне таблиц ---
+        # --- Table-level dependencies ---
         source_tables_in_query = []
         try:
             # Find all tables used, excluding CTEs defined within the main statement
             all_tables = list(main_statement.find_all(sqlglot.exp.Table))
-            # Ищем CTE
+            # Searching for CTE
             ctes_in_scope = set()
             with_scope = main_statement.find(sqlglot.exp.With)
             if with_scope:
                 # Normalize CTE names for comparison
                 ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if cte.alias_or_name}
 
-            # Фильтруем таблицы, оставляя только те, что не являются CTE
+            # Filter tables, keeping only those that are not CTEs
             source_tables_in_query = [
                 tbl for tbl in all_tables
                 if normalize_name(tbl.name) not in ctes_in_scope
             ]
             if ctes_in_scope:
-                logger.debug(f"Обнаружены CTE: {ctes_in_scope} в {model_id}")
+                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model_id}")
 
         except Exception as e:
-            logger.error(f"Ошибка поиска таблиц-источников в {file_path.name} для {model_id}: {e}")
+            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
 
         processed_upstream_models = set()
         target_schema_norm = normalize_name(target_schema)
@@ -471,25 +627,25 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
             source_table_name = table_expr.name
             source_table_name_norm = normalize_name(source_table_name)
 
-            # Схема из выражения или целевая
+            # Schema from expression or target
             source_schema = table_expr.db if table_expr.db else target_schema
             source_schema_norm = normalize_name(source_schema)
 
-            # Игнорируем ссылку на саму себя
+            # Ignore self-reference
             if source_schema_norm == target_schema_norm and source_table_name_norm == target_table_norm:
                 continue
 
             try:
                 upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
             except ValueError as e:
-                logger.error(f"Ошибка форматирования ID для таблицы-источника {source_schema}.{source_table_name} в {model_id}: {e}")
+                logger.error(f"ID formatting error for source table {source_schema}.{source_table_name} in {model_id}: {e}")
                 continue
 
             if upstream_model_id in processed_upstream_models:
                 continue
             processed_upstream_models.add(upstream_model_id)
 
-            # Добавляем узел источника
+            # Add source node
             if not graph.has_node(upstream_model_id):
                 is_known = upstream_model_id in known_models
                 source_type = 'model' if is_known else 'source_table'
@@ -502,23 +658,23 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                         "source_type": source_type
                     }
                     graph.add_node(upstream_model_id, **up_attrs)
-                    logger.debug(f"Добавлен узел источника: {upstream_model_id} (Тип: {source_type})")
+                    logger.debug(f"Source node added: {upstream_model_id} (Type: {source_type})")
                 except (ValueError, KeyError) as e:
-                     logger.error(f"Ошибка добавления узла-источника {upstream_model_id}: {e}")
-                     continue # Пропускаем ребро
+                     logger.error(f"Error adding source node {upstream_model_id}: {e}")
+                     continue # Skipping edge
 
-            # Добавляем ребро зависимости
+            # Adding dependency edge
             if graph.has_node(upstream_model_id):
-                 graph.add_edge(model_id, upstream_model_id, type='table_dependency')
-                 logger.debug(f"Добавлена зависимость таблицы: {model_id} -> {upstream_model_id}")
+                graph.add_edge(model_id, upstream_model_id, type='table_dependency')
+                logger.debug(f"Table dependency added: {model_id} -> {upstream_model_id}")
 
 
-        # --- Анализ зависимостей колонок ---
+        # --- Column dependency analysis ---
         target_columns: List[str] = []
         select_expressions: List[Expression] = []
 
         try:
-            # Код извлечения target_columns и select_expressions остался прежним
+            # The code for extracting target_columns and select_expressions remains unchanged
             select_part = None
             if isinstance(main_statement, sqlglot.exp.Insert):
                 if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
@@ -556,26 +712,29 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
             original_len = len(target_columns)
             target_columns = [col for col in target_columns if isinstance(col, str)]
             if len(target_columns) != original_len:
-                 logger.warning(f"Некоторые целевые колонки не являются строками или None и были пропущены в {model_id}")
+                logger.warning(f"Some target columns are neither strings nor None and have been skipped in {model_id}")
 
         except Exception as e:
-             logger.error(f"Ошибка извлечения целевых колонок/выражений для {model_id} из {file_path.name}: {e}", exc_info=True)
-             target_columns = []
-             select_expressions = []
+            logger.error(f"Error extracting target columns/expressions for {model_id} from {file_path.name}: {e}", exc_info=True)
+            target_columns = []
+            select_expressions = []
 
 
         if not target_columns:
-            logger.warning(f"Не удалось извлечь целевые колонки для {model_id}. Анализ lineage для колонок не будет выполнен.")
+            logger.warning(f"Failed to extract target columns for {model_id}. Lineage analysis for columns will be skipped.")
         else:
-            logger.debug(f"Целевые колонки для {model_id} (перед lineage): {target_columns}")
+            logger.debug(f"Target columns for {model_id} (before lineage): {target_columns}")
             if select_expressions and len(target_columns) != len(select_expressions):
-                 logger.warning(f"Число целевых колонок ({len(target_columns)}) не совпадает с числом выражений в SELECT ({len(select_expressions)}) для {model_id}. Lineage может быть неточным.")
+                logger.warning(
+                    f"The number of target columns ({len(target_columns)}) differs from the number of expressions in the SELECT clause ({len(select_expressions)}) for {model_id}. This may result in inaccurate lineage."
+                )
+
 
             parsed_target_id_info = parse_node_id(model_id)
 
-            # Обрабатываем каждую целевую колонку
+            # Processing each target column
             for i, col_name in enumerate(target_columns):
-                # col_name - оригинальное имя из SQL
+                # col_name is the original name from SQL
                 target_col_sql_expression: Optional[Expression] = None
                 if i < len(select_expressions):
                      target_col_sql_expression = select_expressions[i]
@@ -584,7 +743,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     target_col_id = format_node_id(COL_PREFIX, parsed_target_id_info['schema'], parsed_target_id_info['table'], col_name)
                     col_name_norm = normalize_name(col_name)
 
-                    # Добавляем узел колонки цели
+                    # Adding a target column node
                     col_attrs = {
                         "type": COL_PREFIX,
                         "schema": parsed_target_id_info['schema'],
@@ -593,122 +752,23 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     }
                     graph.add_node(target_col_id, **col_attrs)
                     graph.add_edge(model_id, target_col_id, type='contains_column')
-                    logger.debug(f"Добавлен узел/ребро для колонки: {target_col_id}")
+                    logger.debug(f"Added node/edge for column: {target_col_id}")
 
-                    # --- Lineage Analysis ---
-                    lineage_target_column = col_name # Используем имя колонки как цель для lineage
-                    lineage_sql_statement = main_statement # Весь INSERT или CREATE AS SELECT
-
-                    # Получаем корневой узел дерева lineage для целевой колонки
-                    lineage_result_node: Optional[LineageNode] = None
-                    try:
-                        lineage_result_node = sqlglot_lineage(
-                            column=lineage_target_column,
-                            sql=lineage_sql_statement,
-                            dialect=getattr(config, 'SQL_DIALECT', None),
-                            # schema=... # Можно передать схему для лучшего разрешения
-                        )
-                    except NotImplementedError as nie:
-                        logger.warning(f"Lineage не реализован для части выражения, связанного с колонкой '{col_name}' в {model_id}. Ошибка: {nie}")
-                    except KeyError as ke:
-                         # Часто возникает, если sqlglot не может разрешить имя колонки/таблицы
-                         logger.warning(f"Ошибка KeyError при lineage для колонки '{col_name}' в {model_id}: {ke}. Возможно, не удалось разрешить имя.")
-                    except Exception as e:
-                         logger.error(f"Ошибка выполнения sqlglot.lineage для колонки '{col_name}' в {model_id}: {e}", exc_info=False) # Убрал traceback по умолчанию
-
-                    if lineage_result_node:
-                        # Используем обновленную функцию для поиска колонок-источников в дереве lineage
-                        source_column_expressions: List[sqlglot.exp.Column] = find_source_columns_from_lineage(
-                            lineage_result_node,
-                            lineage_target_column, # Имя целевой колонки для сравнения
-                            getattr(config, 'SQL_DIALECT', None)
-                        )
-
-                        processed_source_col_ids = set()
-                        # Обрабатываем найденные колонки-источники
-                        for source_expr in source_column_expressions:
-                            source_col_name = source_expr.name
-                            source_table_alias = source_expr.table # Имя таблицы/алиаса из выражения колонки
-                            source_schema_alias = source_expr.db   # Имя схемы из выражения колонки
-
-                            # Разрешаем алиас/имя таблицы к реальной таблице/схеме
-                            # Передаем итератор source_tables_in_query (таблицы из FROM/JOIN без CTE)
-                            actual_source_schema, actual_source_table_name = resolve_table_alias(
-                                source_table_alias,
-                                source_schema_alias,
-                                iter(source_tables_in_query),
-                                target_schema # Схема целевой таблицы как дефолтная
-                            )
-
-                            if actual_source_table_name and actual_source_schema:
-                                try:
-                                    source_col_id = format_node_id(COL_PREFIX, actual_source_schema, actual_source_table_name, source_col_name)
-
-                                    if source_col_id in processed_source_col_ids:
-                                        continue
-                                    processed_source_col_ids.add(source_col_id)
-
-                                    source_col_name_norm = normalize_name(source_col_name)
-                                    parsed_source_table_id_info = parse_node_id(format_node_id(TBL_PREFIX, actual_source_schema, actual_source_table_name))
-
-                                    # Добавляем узел колонки-источника
-                                    if not graph.has_node(source_col_id):
-                                        src_col_attrs = {
-                                            "type": COL_PREFIX,
-                                            "schema": parsed_source_table_id_info['schema'],
-                                            "table": parsed_source_table_id_info['table'],
-                                            "column": source_col_name_norm
-                                        }
-                                        graph.add_node(source_col_id, **src_col_attrs)
-                                        logger.debug(f"Добавлен узел колонки источника: {source_col_id}")
-
-                                        # Ребро от таблицы-источника к её колонке
-                                        upstream_model_id = format_node_id(TBL_PREFIX, parsed_source_table_id_info['schema'], parsed_source_table_id_info['table'])
-                                        if not graph.has_node(upstream_model_id):
-                                            # Добавляем узел таблицы, если пропустили
-                                            is_known = upstream_model_id in known_models
-                                            source_type = 'model' if is_known else 'source_table'
-                                            up_attrs = {
-                                                "type": TBL_PREFIX,
-                                                "schema": parsed_source_table_id_info['schema'],
-                                                "name": parsed_source_table_id_info['table'],
-                                                "source_type": source_type
-                                            }
-                                            graph.add_node(upstream_model_id, **up_attrs)
-                                            logger.debug(f"Добавлен недостающий узел источника: {upstream_model_id} (Тип: {source_type})")
-
-                                        if graph.has_node(upstream_model_id) and not graph.has_edge(upstream_model_id, source_col_id):
-                                            graph.add_edge(upstream_model_id, source_col_id, type='contains_column')
-                                            logger.debug(f"Добавлено ребро содержит_колонку: {upstream_model_id} -> {source_col_id}")
-
-                                    # Добавляем ребро зависимости колонок: target_col -> source_col
-                                    if graph.has_node(source_col_id):
-                                         graph.add_edge(target_col_id, source_col_id, type='column_dependency')
-                                         logger.debug(f"Добавлена зависимость колонок: {target_col_id} -> {source_col_id}")
-                                    else:
-                                         logger.warning(f"Не удалось добавить ребро {target_col_id} -> {source_col_id}, узел источника не найден.")
-
-                                except (ValueError, KeyError) as e:
-                                     logger.error(f"Ошибка обработки/добавления узла/ребра для колонки-источника {actual_source_schema}.{actual_source_table_name}.{source_col_name}: {e}")
-                            else:
-                                logger.warning(f"Не удалось разрешить источник для колонки '{source_expr.sql()}' (из lineage для '{col_name}') в {model_id}. Исходный алиас/таблица: '{source_table_alias}', схема: '{source_schema_alias}'.")
-                        # Конец цикла по source_column_expressions
-                    else:
-                        logger.debug(f"Lineage не вернул результат для колонки '{col_name}' в {model_id}.")
+                    build_column_dependency_grapth(model_id, col_name, main_statement)
 
                 except (ValueError, KeyError) as e:
-                     logger.error(f"Ошибка обработки целевой колонки '{col_name}' или ее зависимостей в {model_id}: {e}")
+                    logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
                 except Exception as e:
-                     logger.error(f"Неожиданная ошибка при анализе lineage для колонки '{col_name}' в {model_id}: {e}", exc_info=True)
-            # Конец цикла for col_name in target_columns
+                    logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
+            # End of for loop over target_columns
 
-    logger.info(f"Построение графа завершено. Узлов: {graph.number_of_nodes()}, Ребер: {graph.number_of_edges()}")
+    logger.info(f"Graph construction completed. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
     return graph, known_models
 
-# --- Функции сохранения/загрузки и сравнения графов ---
+# --- Graph saving/loading and comparison functions ---
 def save_graph_state(graph: nx.DiGraph, state_file: Path):
-    """Сохраняет граф в JSON файл."""
-    logger.info(f"Сохранение состояния графа в {state_file}...")
+    """Saves the graph to a JSON file."""
+    logger.info(f"Saving graph state to {state_file}...")
     try:
         # Prepare graph data for JSON serialization
         export_graph = graph.copy() # Work on a copy
@@ -719,52 +779,52 @@ def save_graph_state(graph: nx.DiGraph, state_file: Path):
             # Sanitize other non-serializable types if necessary
             for key, value in list(data.items()):
                 if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    logger.debug(f"Конвертация атрибута узла '{node}' [{key}]: {type(value)} -> str")
+                    logger.debug(f"Converting node attribute '{node}' [{key}]: {type(value)} -> str")
                     data[key] = str(value)
         for u, v, data in export_graph.edges(data=True):
-             for key, value in list(data.items()):
-                 if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    logger.debug(f"Конвертация атрибута ребра '({u}, {v})' [{key}]: {type(value)} -> str")
+            for key, value in list(data.items()):
+                if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                    logger.debug(f"Converting edge attribute '({u}, {v})' [{key}]: {type(value)} -> str")
                     data[key] = str(value)
 
         graph_data = json_graph.node_link_data(export_graph)
         with state_file.open('w', encoding='utf-8') as f:
             json.dump(graph_data, f, indent=2, ensure_ascii=False)
-        logger.info("Состояние графа успешно сохранено.")
+        logger.info("Graph state saved successfully.")
     except TypeError as te:
-         logger.error(f"Ошибка сериализации графа в JSON: {te}.", exc_info=True)
+        logger.error(f"Error serializing graph to JSON: {te}.", exc_info=True)
     except Exception as e:
-        logger.error(f"Не удалось сохранить состояние графа: {e}", exc_info=True)
+        logger.error(f"Failed to save graph state: {e}", exc_info=True)
 
 def load_graph_state(state_file: Path) -> Optional[nx.DiGraph]:
-    """Загружает граф из JSON файла."""
+    """Loads a graph from a JSON file."""
     state_file_path = Path(state_file) # Убедимся, что это Path объект
     if not state_file_path.exists():
-        logger.info(f"Файл состояния {state_file_path} не найден. Предыдущее состояние отсутствует.")
+        logger.info(f"State file {state_file_path} not found. No previous state available.")
         return None
-    logger.info(f"Загрузка состояния графа из {state_file_path}...")
+    logger.info(f"Loading graph state from {state_file_path}...")
     try:
         with state_file_path.open('r', encoding='utf-8') as f:
             data = json.load(f)
         # Use multigraph=False since we don't expect parallel edges of the same type
         graph = json_graph.node_link_graph(data, directed=True, multigraph=False)
-        logger.info(f"Состояние графа успешно загружено. Узлов: {graph.number_of_nodes()}, Ребер: {graph.number_of_edges()}")
+        logger.info(f"Graph state loaded successfully. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
         return graph
     except json.JSONDecodeError as jde:
-        logger.error(f"Ошибка декодирования JSON из файла {state_file_path}: {jde}")
+        logger.error(f"Failed to decode JSON from file {state_file_path}: {jde}")
         return None
     except Exception as e:
-        logger.error(f"Не удалось загрузить состояние графа из {state_file_path}: {e}", exc_info=True)
+        logger.error(f"Failed to load graph state from {state_file_path}: {e}", exc_info=True)
         return None
 
 def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[str, Set[str]]:
     """
-    Находит все нижестоящие узлы (модели и колонки), зависящие от измененного узла.
-    Использует обратный обход графа (от источника к потребителям).
+    Finds all downstream nodes (models and columns) that depend on the modified node.
+    Uses reverse graph traversal (from source to consumers).
     """
     affected: Dict[str, Set[str]] = {"tables": set(), "columns": set()}
 
-    # Нормализуем ID для поиска в графе, если включена нормализация
+    # Normalize the ID for graph lookup if normalization is enabled
     search_node_id = changed_node_id
     if NORMALIZE_NAMES:
         try:
@@ -776,25 +836,25 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
                 parsed_input_id.get('column')
             )
             if changed_node_id != search_node_id:
-                logger.debug(f"Нормализованный ID для поиска: {search_node_id} (из {changed_node_id})")
+                logger.debug(f"Normalized ID for lookup: {search_node_id} (from {changed_node_id})")
         except ValueError as e:
-             logger.warning(f"Не удалось нормализовать ID '{changed_node_id}' для поиска: {e}. Поиск будет выполнен по оригинальному ID.")
-             search_node_id = changed_node_id # Ищем как есть
+            logger.warning(f"Failed to normalize ID '{changed_node_id}' for lookup: {e}. Lookup will proceed using the original ID.")
+            search_node_id = changed_node_id # Searching for "as is"
 
     if not graph.has_node(search_node_id):
         logger.error(f"Узел '{search_node_id}' не найден в графе.")
-        # Попробуем найти без нормализации, если она применялась
+        # Try to find without normalization, if it was applied
         if search_node_id != changed_node_id and graph.has_node(changed_node_id):
-            logger.warning(f"Узел '{search_node_id}' не найден, но найден '{changed_node_id}'. Используем его.")
+            logger.warning(f"Node '{search_node_id}' not found, but '{changed_node_id}' was found. Using it instead.")
             search_node_id = changed_node_id
         else:
             return affected
 
-    # nx.ancestors(graph, node) находит все узлы X, такие что есть путь X -> ... -> node.
-    # Поскольку ребра у нас target -> source, ancestors(graph, source_node) найдет все target_nodes.
+    # nx.ancestors(graph, node) finds all nodes X such that there is a path X -> ... -> node.
+    # Since our edges go from target -> source, ancestors(graph, source_node) will return all target_nodes.
     downstream_dependents = nx.ancestors(graph, search_node_id)
 
-    logger.info(f"Поиск зависимых от {search_node_id}...")
+    logger.info(f"Searching for nodes dependent on {search_node_id}...")
     for node_id in downstream_dependents:
         try:
             node_data = graph.nodes[node_id]
@@ -804,43 +864,43 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
             elif node_type == COL_PREFIX:
                 affected["columns"].add(node_id)
         except KeyError:
-             logger.warning(f"Не найдены данные для узла {node_id} при поиске зависимых.")
+            logger.warning(f"No data found for node {node_id} while searching for dependents.")
 
-    # Добавим сам измененный узел и его непосредственные компоненты
+    # Add the modified node itself and its immediate components
     try:
         parsed_search_id = parse_node_id(search_node_id)
         if parsed_search_id['type'] == COL_PREFIX:
             affected["columns"].add(search_node_id)
-            # Также добавим таблицу, к которой относится измененная колонка
+            # Also add the table to which the modified column belongs
             table_id = format_node_id(TBL_PREFIX, parsed_search_id['schema'], parsed_search_id['table'])
             if graph.has_node(table_id):
                  affected["tables"].add(table_id)
         elif parsed_search_id['type'] == TBL_PREFIX:
-             affected["tables"].add(search_node_id)
-             # Если изменилась таблица, то все её колонки (в текущем графе) тоже затронуты
-             # Ищем через predecessors, т.к. ребра table -> column
-             for predecessor_id in graph.predecessors(search_node_id):
-                  edge_data = graph.get_edge_data(predecessor_id, search_node_id)
-                  # ОШИБКА ЛОГИКИ ЗДЕСЬ: ребра от таблицы к колонке идут contains_column(table_id, col_id)
-                  # Значит надо искать successors(table_id)
-             for successor_id in graph.successors(search_node_id):
-                 edge_data = graph.get_edge_data(search_node_id, successor_id)
-                 if edge_data and edge_data.get("type") == 'contains_column':
-                      if graph.nodes[successor_id].get("type") == COL_PREFIX:
-                           affected["columns"].add(successor_id)
+            affected["tables"].add(search_node_id)
+            # If the table has changed, all its columns (in the current graph) are also affected
+            # We search via predecessors, since the edges go from table -> column
+            for predecessor_id in graph.predecessors(search_node_id):
+                edge_data = graph.get_edge_data(predecessor_id, search_node_id)
+                # Edges go from table to column via contains_column(table_id, col_id)
+                # So we should be using successors(table_id)
+            for successor_id in graph.successors(search_node_id):
+                edge_data = graph.get_edge_data(search_node_id, successor_id)
+                if edge_data and edge_data.get("type") == 'contains_column':
+                    if graph.nodes[successor_id].get("type") == COL_PREFIX:
+                        affected["columns"].add(successor_id)
 
     except (ValueError, KeyError) as e:
-        logger.warning(f"Ошибка при самодобавлении/добавлении компонентов узла {search_node_id} в affected: {e}")
+        logger.warning(f"Error while auto-adding/adding components of node {search_node_id} to affected: {e}")
 
 
-    logger.info(f"Найдено {len(affected['tables'])} зависимых таблиц и {len(affected['columns'])} зависимых колонок для '{search_node_id}'.")
+    logger.info(f"Found {len(affected['tables'])} dependent tables and {len(affected['columns'])} dependent columns for '{search_node_id}'.")
     return affected
 
 def find_significat_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGraph):
-    # 3. Сравниваем состояния и анализируем ИМПАКТ УДАЛЕНИЙ/ИЗМЕНЕНИЙ
+    # Comparing states and analyzing the impact of deletions/changes
     if previous_graph:
         logger.info("-" * 30)
-        logger.info("Сравнение с предыдущим состоянием:")
+        logger.info("Comparing with the previous state:")
 
         current_nodes = set(current_graph.nodes)
         previous_nodes = set(previous_graph.nodes)
@@ -852,76 +912,76 @@ def find_significat_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGrap
         added_edges = current_edges - previous_edges
         removed_edges = previous_edges - current_edges
 
-        # --- Базовый отчет об изменениях ---
+        # --- Basic change report ---
         has_changes = added_nodes or removed_nodes or added_edges or removed_edges
         if has_changes:
-             if added_nodes:
-                 logger.info(f"Добавлено узлов ({len(added_nodes)}): {sorted(list(added_nodes))}")
-             if removed_nodes:
-                 logger.info(f"Удалено узлов ({len(removed_nodes)}): {sorted(list(removed_nodes))}")
-             if added_edges:
-                  logger.info(f"Добавлено зависимостей ({len(added_edges)}): {sorted([(u,v) for u,v in added_edges])}")
-             if removed_edges:
-                  logger.info(f"Удалено зависимостей ({len(removed_edges)}): {sorted([(u,v) for u,v in removed_edges])}")
+            if added_nodes:
+                logger.info(f"Added nodes ({len(added_nodes)}): {sorted(list(added_nodes))}")
+            if removed_nodes:
+                logger.info(f"Deleted Nodes ({len(removed_nodes)}): {sorted(list(removed_nodes))}")
+            if added_edges:
+                logger.info(f"Added dependencies ({len(added_edges)}): {sorted([(u,v) for u,v in added_edges])}")
+            if removed_edges:
+                logger.info(f"Removed dependencies ({len(removed_edges)}): {sorted([(u, v) for u, v in removed_edges])}")
         else:
-            logger.info("Структурных изменений (узлы, ребра) не обнаружено.")
+            logger.info("No structural changes (nodes, edges) detected.")
             save_graph_state(current_graph, config.STATE_FILE)
-            logger.info("Анализ зависимостей завершен.")
+            logger.info("Dependency analysis completed.")
             return
 
-        # --- Анализ влияния удаленных элементов ---
+        # --- Analysis of the impact of removed elements ---
         impacted_by_removal_tables = set()
         impacted_by_removal_columns = set()
-        directly_affected_targets = set() # Узлы в ТЕКУЩЕМ графе, чьи зависимости ИСЧЕЗЛИ
+        directly_affected_targets = set() # Nodes in the CURRENT graph whose dependencies have DISAPPEARED
 
-        # Ищем цели (predecessors), которые в previous_graph указывали на удаленные узлы
+        # Looking for targets (predecessors) in the previous_graph that pointed to removed nodes
         for removed_node_id in removed_nodes:
             if removed_node_id in previous_graph:
-                 # Ищем узлы, которые *ранее* зависели от удаленного узла
-                 for predecessor_id in previous_graph.predecessors(removed_node_id):
-                     # Если этот зависящий узел все еще существует
-                     if predecessor_id in current_graph:
-                         edge_data = previous_graph.get_edge_data(predecessor_id, removed_node_id)
-                         edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
-                         logger.debug(f"Узел {predecessor_id} (существует) ранее зависел ({edge_type}) от удаленного узла {removed_node_id}.")
-                         directly_affected_targets.add(predecessor_id)
+                # Looking for nodes that *previously* depended on a removed node
+                for predecessor_id in previous_graph.predecessors(removed_node_id):
+                    # If this dependent node still exists
+                    if predecessor_id in current_graph:
+                        edge_data = previous_graph.get_edge_data(predecessor_id, removed_node_id)
+                        edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
+                        logger.debug(f"Node {predecessor_id} (exists) previously depended on the removed node {removed_node_id} via {edge_type}.")
+                        directly_affected_targets.add(predecessor_id)
 
-        # Ищем цели (u), чьи ребра (u, v) были удалены, но оба узла u и v существуют
+        # Looking for targets (u) whose edges (u, v) were removed, but both nodes u and v still exist
         for u, v in removed_edges:
             if u in current_graph and v in current_graph:
-                 if previous_graph.has_edge(u, v): # Убедимся, что ребро действительно было
-                      edge_data = previous_graph.get_edge_data(u, v)
-                      edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
-                      logger.debug(f"Зависимость ({edge_type}) узла {u} от {v} была удалена (оба узла существуют).")
-                      directly_affected_targets.add(u) # Узел 'u' затронут изменением
+                if previous_graph.has_edge(u, v): # Убедимся, что ребро действительно было
+                    edge_data = previous_graph.get_edge_data(u, v)
+                    edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
+                    logger.debug(f"The {edge_type} dependency of node {u} on {v} was removed (both nodes still exist).")
+                    directly_affected_targets.add(u) # Узел 'u' затронут изменением
 
-        # Теперь находим полный downstream impact для directly_affected_targets в ТЕКУЩЕМ графе
+        # Now find the full downstream impact for directly_affected_targets in the CURRENT graph
         if directly_affected_targets:
-            logger.info("--- Анализ влияния удаленных/измененных зависимостей ---")
-            final_impacted_nodes = set() # Собираем ВСЕ затронутые узлы (прямо и косвенно)
+            logger.info("-- Analyzing the impact of removed/modified dependencies ---")
+            final_impacted_nodes = set() # Collect ALL affected nodes (directly and indirectly)
 
             for target_id in directly_affected_targets:
-                 # Добавляем сам узел, чья зависимость изменилась
-                 final_impacted_nodes.add(target_id)
+                # Add the node whose dependency has changed
+                final_impacted_nodes.add(target_id)
 
-                 # Ищем всех, кто зависит от этого измененного узла в ТЕКУЩЕМ графе
-                 # Используем nx.ancestors, т.к. ребра target -> source
-                 try:
-                      if current_graph.has_node(target_id):
-                          downstream_dependents = nx.ancestors(current_graph, target_id)
-                          logger.debug(f"Поиск downstream от {target_id}: {downstream_dependents}")
-                          final_impacted_nodes.update(downstream_dependents)
-                      else:
-                          # Этого не должно происходить по логике выше, но на всякий случай
-                          logger.warning(f"Узел {target_id}, помеченный как directly affected, отсутствует в текущем графе при поиске downstream.")
+                # Find all nodes that depend on this changed node in the CURRENT graph
+                # Use nx.ancestors because edges go from target -> source
+                try:
+                    if current_graph.has_node(target_id):
+                        downstream_dependents = nx.ancestors(current_graph, target_id)
+                        logger.debug(f"Searching downstream from {target_id}: {downstream_dependents}")
+                        final_impacted_nodes.update(downstream_dependents)
+                    else:
+                        # This shouldn't happen according to the logic above, but just in case
+                        logger.warning(f"Node {target_id}, marked as directly affected, is missing from the current graph during downstream search.")
 
-                 except nx.NetworkXError as ne:
-                      logger.error(f"Ошибка при поиске зависимых от {target_id} в текущем графе: {ne}")
+                except nx.NetworkXError as ne:
+                    logger.error(f"Error while searching for dependents of {target_id} in the current graph: {ne}")
 
 
-            # Категоризируем затронутые узлы
+            # Categorizing affected nodes
             for node_id in final_impacted_nodes:
-                # Берем данные из текущего графа, если узел существует
+                # Retrieve data from the current graph if the node exists
                 if node_id in current_graph:
                     try:
                         node_data = current_graph.nodes[node_id]
@@ -931,78 +991,78 @@ def find_significat_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGrap
                         elif node_type == COL_PREFIX:
                             impacted_by_removal_columns.add(node_id)
                     except KeyError:
-                        logger.warning(f"Не найдены данные для существующего узла {node_id} в текущем графе.")
+                        logger.warning(f"No data found for existing node {node_id} in the current graph.")
                 else:
-                    # Если узел был затронут, но теперь удален (например, target_id сам был удален каскадно)
-                    # Попробуем взять данные из предыдущего графа
+                    # If the node was affected but is now deleted (e.g., target_id was removed via cascade)
+                    # Try to retrieve data from the previous graph
                     if node_id in previous_graph:
                          try:
                             node_data = previous_graph.nodes[node_id]
                             node_type = node_data.get("type")
                             if node_type == TBL_PREFIX:
-                                impacted_by_removal_tables.add(f"{node_id} (удален)")
+                                impacted_by_removal_tables.add(f"{node_id} (was removed)")
                             elif node_type == COL_PREFIX:
-                                impacted_by_removal_columns.add(f"{node_id} (удален)")
+                                impacted_by_removal_columns.add(f"{node_id} (was removed)")
                          except KeyError:
-                             logger.warning(f"Не найдены данные для удаленного узла {node_id} в предыдущем графе.")
+                            logger.warning(f"No data found for deleted node {node_id} in the previous graph.")
                     else:
-                        # Совсем странный случай
-                        logger.warning(f"Затронутый узел {node_id} не найден ни в текущем, ни в предыдущем графе.")
+                        # A very unusual case
+                        logger.warning(f"Affected node {node_id} was not found in either the current or the previous graph.")
 
 
             if impacted_by_removal_tables or impacted_by_removal_columns:
-                logger.info("Обнаружено влияние на следующие объекты из-за удаленных/измененных зависимостей:")
+                logger.info("Detected impact on the following objects due to removed/modified dependencies:")
                 if impacted_by_removal_tables:
-                    logger.info(f"  Затронутые таблицы ({len(impacted_by_removal_tables)}): {sorted(list(impacted_by_removal_tables))}")
+                    logger.info(f"  Impacted tables ({len(impacted_by_removal_tables)}): {sorted(list(impacted_by_removal_tables))}")
                 if impacted_by_removal_columns:
-                    logger.info(f"  Затронутые колонки ({len(impacted_by_removal_columns)}): {sorted(list(impacted_by_removal_columns))}")
+                    logger.info(f"  Impacted columns ({len(impacted_by_removal_columns)}): {sorted(list(impacted_by_removal_columns))}")
             else:
-                 # Если directly_affected_targets был, но итоговый импакт пуст (например, зависели только удаленные узлы)
-                 if directly_affected_targets:
-                     logger.info("Изменения зависимостей затронули только удаленные объекты.")
-                 else: # Эта ветка не должна достигаться, если has_changes=True и directly_affected_targets пуст
-                      logger.info("Удаленные/измененные узлы/ребра не привели к разрыву известных зависимостей у существующих объектов.")
+                logger.info("Directly affected targets were identified, but no remaining objects were impacted (only removed nodes were affected).")
+                if directly_affected_targets:
+                    logger.info("Dependency changes affected only removed objects.")
+                else: # This branch should not be reached: has_changes=True, but directly_affected_targets is empt
+                    logger.info("Removed or modified nodes/edges did not break any known dependencies of existing objects.")
 
         logger.info("-" * 30)
 
     else:
-        logger.info("Предыдущее состояние не найдено, сравнение и анализ влияния не выполняются.")
+        logger.info("Previous state not found — skipping comparison and impact analysis.")
 
 def main():
-    logger.info("="*50)
-    logger.info("Запуск анализатора зависимостей SQL моделей...")
-    logger.info(f"Используется директория моделей: {config.SQL_MODELS_DIR}")
-    logger.info(f"Файл состояния: {config.STATE_FILE}")
-    logger.info(f"Нормализация имен: {NORMALIZE_NAMES}")
-    logger.info(f"SQL диалект: {getattr(config, 'SQL_DIALECT', 'Не указан')}")
-    logger.info("="*50)
+    logger.info("=" * 50)
+    logger.info("Starting SQL model dependency analyzer...")
+    logger.info(f"Using models directory: {config.SQL_MODELS_DIR}")
+    logger.info(f"State file: {config.STATE_FILE}")
+    logger.info(f"Name normalization: {NORMALIZE_NAMES}")
+    logger.info(f"SQL dialect: {getattr(config, 'SQL_DIALECT', 'Not specified')}")
+    logger.info("=" * 50)
 
     if not config.SQL_MODELS_DIR.is_dir():
-        logger.error(f"Папка с SQL моделями не найдена: {config.SQL_MODELS_DIR}")
-        logger.error("Проверьте путь в config.py и убедитесь, что папка существует.")
+        logger.error(f"SQL models directory not found: {config.SQL_MODELS_DIR}")
+        logger.error("Please check the path in config.py and make sure the directory exists.")
         return
 
     sql_files = find_sql_files(config.SQL_MODELS_DIR)
     if not sql_files:
-        logger.warning("Не найдено SQL файлов для анализа.")
+        logger.warning("No SQL files found for analysis.")
         if not Path(config.STATE_FILE).exists():
-            logger.info("Создание пустого файла состояния.")
+            logger.info("Creating an empty state file.")
             save_graph_state(nx.DiGraph(), Path(config.STATE_FILE))
-        logger.info("Завершение работы.")
+        logger.info("Shutting down.")
         return
 
-    # 1. Загружаем предыдущее состояние
+    # 1. Loading previous state
     previous_graph = load_graph_state(config.STATE_FILE)
 
-    # 2. Строим текущее состояние
+    # 2. Building current state
     current_graph, _ = build_dependency_graph(sql_files, config.SQL_MODELS_DIR)
 
     find_significat_changes(previous_graph, current_graph)
 
-    # 4. Сохранить текущее состояние графа
+    # 4. Save current graph state
     save_graph_state(current_graph, config.STATE_FILE)
 
-    logger.info("Анализ зависимостей завершен.")
+    logger.info("Dependency analysis completed.")
 
 if __name__ == "__main__":
     main()
