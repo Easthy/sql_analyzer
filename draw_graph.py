@@ -28,9 +28,6 @@ COLUMN_ARROW_SIZE = 10
 # Загрузим твой JSON (можно из файла или строки)
 with open("dependency_state.json") as f:
     data = json.load(f)
-# Or load from file:
-# with open("dependency_state.json") as f:
-#     data = json.load(f)
 
 # Create the full graph
 G = json_graph.node_link_graph(data, directed=True, multigraph=False)

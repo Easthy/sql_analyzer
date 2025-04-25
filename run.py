@@ -18,18 +18,8 @@ from networkx.readwrite import json_graph
 from rich.logging import RichHandler
 from rich.text import Text
 import warnings
+import config
 warnings.simplefilter(action='ignore', category=FutureWarning) # Suppress pandas future warning from networkx/json
-
-# --- config ---
-try:
-    import config
-except ImportError:
-    print("Ошибка: Файл конфигурации 'config.py' не найден.")
-    print("Создайте файл 'config.py' с необходимыми настройками.")
-    exit(1)
-except Exception as e: # Catch broader errors during config import/access
-    print(f"Ошибка при импорте или доступе к config.py: {e}")
-    exit(1)
 
 # --- Checking for the presence of required attributes in config ---
 required_configs = ['SQL_MODELS_DIR', 'STATE_FILE', 'SQL_DIALECT', 'SQL_FILE_EXTENSION']
@@ -254,10 +244,26 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
     Recursively traverses the lineage Node tree and collects all
     sqlglot.exp.Column expressions that represent terminal sources
     (i.e., leaf Column nodes in the lineage tree with table information).
+    source_col_id = format_node_id(
+        COL_PREFIX,
+        'business_vault',
+        'br_payment',
+        'sum_usd',
+    )
+    target_col_id = format_node_id(
+        COL_PREFIX,
+        'public',
+        'user_daily_kpi',
+        'deposit_usd',
+    )
+    graph.add_edge(
+        target_col_id, source_col_id, type="column_dependency"
+    )
     """
     sources: List[sqlglot.exp.Column] = []
-    processed_node_ids = set() # Для предотвращения циклов
+    processed_node_ids = set()
 
+    _cols = []
     def traverse(current_node: LineageNode):
         node_id = id(current_node)
         if node_id in processed_node_ids:
@@ -273,16 +279,14 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
 
         if is_leaf_node:
             # If the leaf node is itself a column (and not the target)
-            if isinstance(current_node.expression, sqlglot.exp.Column) and not is_target_node:
-                # Add ONLY if source information (table/alias) is available
-                source_expr = current_node.expression
-                if source_expr.table:
-                    sources.append(source_expr)
-                else:
-                    # Log columns without a table that are being skipped
-                    logger.debug(f"Skipping a leaf node that is a source column '{source_expr.sql(dialect=dialect)}' without table name/alias in the lineage for '{target_col_name}'.")
-            else: # Leaf node is not a column (e.g., a literal or a function without columns)
-                logger.debug(f"Lead node lineage for '{target_col_name}' is not Column: {type(current_node.expression)} [{current_node.name}]")
+            source_col_id = format_node_id(
+                node_type=COL_PREFIX,
+                schema=str(current_node.source).split('.')[0],
+                name=current_node.name.split('.')[0],
+                column=current_node.name.split('.')[1]
+            )
+            logger.debug(f"Found {source_col_id} column as source for the {target_col_name}")
+            _cols.append(source_col_id)
 
         # Recursively traverse child nodes (downstream dependencies)
         # Sources can only appear at the leaf nodes of the lineage tree
@@ -293,16 +297,11 @@ def find_source_columns_from_lineage(node: LineageNode, target_col_name: str, di
     if node:
         traverse(node)
 
-    # Remove duplicate Column objects (just in case)
-    unique_sources_dict = {id(expr): expr for expr in sources}
-    unique_sources = list(unique_sources_dict.values())
-
     # Log the discovered sources
-    source_sqls = [s.sql(dialect=dialect) for s in unique_sources]
-    if source_sqls:
-        logger.debug(f"Found source columns for target '{target_col_name}': {source_sqls}")
+    if _cols:
+        logger.debug(f"Found source columns for target '{target_col_name}': {_cols}")
 
-    return unique_sources
+    return _cols
 
 def resolve_table_alias(source_table_alias: Optional[str],
                          source_schema_alias: Optional[str],
@@ -374,10 +373,11 @@ def resolve_table_alias(source_table_alias: Optional[str],
     logger.warning(f"Failed to resolve alias/table '{source_table_alias}' (schema hint: {source_schema_alias})")
     return None, None
 
-def build_column_dependency_grapth(graph: nx.classes.digraph.DiGraph, model_id: str, col_name: str, main_statement: sqlglot.exp.Insert):
+def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: str, col_name: str, target_col_id: str, main_statement: sqlglot.exp.Insert):
     """
     Calculates the dependencies of columns on each other
     """
+
     # --- Lineage Analysis ---
     lineage_target_column = col_name  # Use the column name as the lineage target
     lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
@@ -408,7 +408,7 @@ def build_column_dependency_grapth(graph: nx.classes.digraph.DiGraph, model_id: 
 
     if lineage_result_node:
         # Searching for source columns in the lineage tree
-        source_column_expressions: List[
+        source_col_ids: List[
             sqlglot.exp.Column
         ] = find_source_columns_from_lineage(
             lineage_result_node,
@@ -416,108 +416,25 @@ def build_column_dependency_grapth(graph: nx.classes.digraph.DiGraph, model_id: 
             getattr(config, "SQL_DIALECT", None),
         )
 
-        processed_source_col_ids = set()
         # Processing the found source columns
-        for source_expr in source_column_expressions:
-            source_col_name = source_expr.name
-            source_table_alias = (
-                source_expr.table
-            )  # Table or alias name from the column expression
-            source_schema_alias = source_expr.db  # Schema name from the column expression
-
-            # Resolve table alias/name to the actual table/schema
-            # Pass the source_tables_in_query iterator (tables from FROM/JOIN excluding CTEs)
-            actual_source_schema, actual_source_table_name = resolve_table_alias(
-                source_table_alias,
-                source_schema_alias,
-                iter(source_tables_in_query),
-                target_schema,  # Target table schema as default
-            )
-
-            if actual_source_table_name and actual_source_schema:
-                try:
-                    source_col_id = format_node_id(
-                        COL_PREFIX,
-                        actual_source_schema,
-                        actual_source_table_name,
-                        source_col_name,
+        for source_col_id in source_col_ids:
+            try:
+                # Добавляем ребро зависимости колонок: target_col -> source_col
+                if graph.has_node(source_col_id):
+                    graph.add_edge(
+                        target_col_id, source_col_id, type="column_dependency"
+                    )
+                    logger.debug(
+                        f"Added column dependency: {target_col_id} -> {source_col_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to add edge {target_col_id} -> {source_col_id}: source node not found."
                     )
 
-                    if source_col_id in processed_source_col_ids:
-                        continue
-                    processed_source_col_ids.add(source_col_id)
-
-                    source_col_name_norm = normalize_name(source_col_name)
-                    parsed_source_table_id_info = parse_node_id(
-                        format_node_id(
-                            TBL_PREFIX, actual_source_schema, actual_source_table_name
-                        )
-                    )
-
-                    # Add source column node
-                    if not graph.has_node(source_col_id):
-                        src_col_attrs = {
-                            "type": COL_PREFIX,
-                            "schema": parsed_source_table_id_info["schema"],
-                            "table": parsed_source_table_id_info["table"],
-                            "column": source_col_name_norm,
-                        }
-                        graph.add_node(source_col_id, **src_col_attrs)
-                        logger.debug(
-                            f"Source column node added: {source_col_id}"
-                        )
-
-                        # Edge from source table to its column
-                        upstream_model_id = format_node_id(
-                            TBL_PREFIX,
-                            parsed_source_table_id_info["schema"],
-                            parsed_source_table_id_info["table"],
-                        )
-                        if not graph.has_node(upstream_model_id):
-                            # Add table node if it was missed
-                            is_known = upstream_model_id in known_models
-                            source_type = "model" if is_known else "source_table"
-                            up_attrs = {
-                                "type": TBL_PREFIX,
-                                "schema": parsed_source_table_id_info["schema"],
-                                "name": parsed_source_table_id_info["table"],
-                                "source_type": source_type,
-                            }
-                            graph.add_node(upstream_model_id, **up_attrs)
-                            logger.debug(
-                                f"Missing source node added: {upstream_model_id} (Type: {source_type})"
-                            )
-
-                        if graph.has_node(upstream_model_id) and not graph.has_edge(
-                            upstream_model_id, source_col_id
-                        ):
-                            graph.add_edge(
-                                upstream_model_id, source_col_id, type="contains_column"
-                            )
-                            logger.debug(
-                                f"Added 'contains_column' edge: {upstream_model_id} -> {source_col_id}"
-                            )
-
-                    # Добавляем ребро зависимости колонок: target_col -> source_col
-                    if graph.has_node(source_col_id):
-                        graph.add_edge(
-                            target_col_id, source_col_id, type="column_dependency"
-                        )
-                        logger.debug(
-                            f"Added column dependency: {target_col_id} -> {source_col_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Failed to add edge {target_col_id} -> {source_col_id}: source node not found."
-                        )
-
-                except (ValueError, KeyError) as e:
-                    logger.error(
-                        f"Error while processing/adding node/edge for source column {actual_source_schema}.{actual_source_table_name}.{source_col_name}: {e}"
-                    )
-            else:
-                logger.warning(
-                    f"Failed to resolve source for column '{source_expr.sql()}' (from lineage of '{col_name}') in {model_id}. Original alias/table: '{source_table_alias}', schema: '{source_schema_alias}'."
+            except (ValueError, KeyError) as e:
+                logger.error(
+                    f"Error while processing/adding node/edge for source column {actual_source_schema}.{actual_source_table_name}.{source_col_name}: {e}"
                 )
         # End of loop over source_column_expressions
     else:
@@ -729,7 +646,6 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     f"The number of target columns ({len(target_columns)}) differs from the number of expressions in the SELECT clause ({len(select_expressions)}) for {model_id}. This may result in inaccurate lineage."
                 )
 
-
             parsed_target_id_info = parse_node_id(model_id)
 
             # Processing each target column
@@ -755,7 +671,7 @@ def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.Di
                     logger.debug(f"Added node/edge for column: {target_col_id}")
 
                     # Add edges between columns
-                    build_column_dependency_grapth(graph, model_id, col_name, main_statement)
+                    build_column_dependency_graph(graph, model_id, col_name, target_col_id, main_statement)
 
                 except (ValueError, KeyError) as e:
                     logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
