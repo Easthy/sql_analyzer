@@ -69,6 +69,32 @@ def format_node_id(node_type: str, schema: Optional[str], name: Optional[str], c
     else:
         raise ValueError(f"Unknown node type: {node_type}")
 
+def get_name_from_node_id(node_id: str) -> str:
+    """
+    Extracts the table or column name from a node ID.
+
+    If the node represents a table (TBL_PREFIX), returns the table name.
+    If the node represents a column (COL_PREFIX), returns the column name.
+    """
+    if node_id.startswith(f"{TBL_PREFIX}:"):
+        # Format: tbl:schema.table
+        try:
+            _, schema_table = node_id.split(":", 1)
+            schema, table = schema_table.split(".", 1)
+            return table
+        except ValueError:
+            raise ValueError(f"Invalid table node_id format: {node_id}")
+    elif node_id.startswith(f"{COL_PREFIX}:"):
+        # Format: col:schema.table.column
+        try:
+            _, schema_table_col = node_id.split(":", 1)
+            schema, table, column = schema_table_col.split(".", 2)
+            return column
+        except ValueError:
+            raise ValueError(f"Invalid column node_id format: {node_id}")
+    else:
+        raise ValueError(f"Unknown node_id prefix: {node_id}")
+
 def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
     """Parses the node ID into components"""
     if not isinstance(node_id, str):
@@ -248,9 +274,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     sources: List[sqlglot.exp.Column] = []
     processed_node_ids = set()
 
-    target_col_name = target_col_id.split(':')[1].split('.')[2]
-
-    # logger.debug(node)
+    target_col_name = get_name_from_node_id(target_col_id)
 
     _cols = []
     def traverse(current_node: LineageNode):
@@ -300,7 +324,7 @@ def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: s
     """
     Calculates the dependencies of columns on each other
     """
-    col_name = target_col_id.split(':')[1].split('.')[2]
+    col_name = get_name_from_node_id(target_col_id)
     # --- Lineage Analysis ---
     lineage_target_column = col_name  # Use the column name as the lineage target
     lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
