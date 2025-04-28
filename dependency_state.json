@@ -5,18 +5,59 @@
   "nodes": [
     {
       "type": "tbl",
-      "schema": "business_vault",
-      "name": "br_payment",
-      "source_type": "model",
-      "file_path": "business_vault/business_vault.br_payment.sql",
-      "id": "tbl:business_vault.br_payment"
-    },
-    {
-      "type": "tbl",
       "schema": "mwl",
       "name": "mysq_payments",
       "source_type": "source_table",
       "id": "tbl:mwl.mysq_payments"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "user_hash_key",
+      "id": "col:mwl.mysq_payments.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "project_id",
+      "id": "col:mwl.mysq_payments.project_id"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "closed_at",
+      "id": "col:mwl.mysq_payments.closed_at"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "operation_id",
+      "id": "col:mwl.mysq_payments.operation_id"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "status",
+      "id": "col:mwl.mysq_payments.status"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "sum",
+      "id": "col:mwl.mysq_payments.sum"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "mysq_payments",
+      "column": "sum_usd",
+      "id": "col:mwl.mysq_payments.sum_usd"
     },
     {
       "type": "tbl",
@@ -24,6 +65,63 @@
       "name": "users",
       "source_type": "source_table",
       "id": "tbl:mwl.users"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "users",
+      "column": "user_hash_key",
+      "id": "col:mwl.users.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "users",
+      "column": "user_id",
+      "id": "col:mwl.users.user_id"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "users",
+      "column": "projec_id",
+      "id": "col:mwl.users.projec_id"
+    },
+    {
+      "type": "col",
+      "schema": "mwl",
+      "table": "users",
+      "column": "fake",
+      "id": "col:mwl.users.fake"
+    },
+    {
+      "type": "tbl",
+      "schema": "reference",
+      "name": "project",
+      "source_type": "source_table",
+      "id": "tbl:reference.project"
+    },
+    {
+      "type": "col",
+      "schema": "reference",
+      "table": "project",
+      "column": "projec_id",
+      "id": "col:reference.project.projec_id"
+    },
+    {
+      "type": "col",
+      "schema": "reference",
+      "table": "project",
+      "column": "name",
+      "id": "col:reference.project.name"
+    },
+    {
+      "type": "tbl",
+      "schema": "business_vault",
+      "name": "br_payment",
+      "source_type": "model",
+      "file_path": "business_vault/business_vault.br_payment.sql",
+      "id": "tbl:business_vault.br_payment"
     },
     {
       "type": "col",
@@ -82,6 +180,13 @@
       "id": "col:business_vault.br_payment.sum_usd"
     },
     {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "br_payment",
+      "column": "in_out_usd",
+      "id": "col:business_vault.br_payment.in_out_usd"
+    },
+    {
       "type": "tbl",
       "schema": "public",
       "name": "total_stat",
@@ -96,13 +201,6 @@
       "source_type": "model",
       "file_path": "public/public.user_daily_kpi.sql",
       "id": "tbl:public.user_daily_kpi"
-    },
-    {
-      "type": "tbl",
-      "schema": "reference",
-      "name": "project",
-      "source_type": "source_table",
-      "id": "tbl:reference.project"
     },
     {
       "type": "col",
@@ -170,6 +268,71 @@
   ],
   "links": [
     {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.project_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.closed_at"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.operation_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.status"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.sum"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.mysq_payments",
+      "target": "col:mwl.mysq_payments.sum_usd"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.users",
+      "target": "col:mwl.users.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.users",
+      "target": "col:mwl.users.user_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.users",
+      "target": "col:mwl.users.projec_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:mwl.users",
+      "target": "col:mwl.users.fake"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:reference.project",
+      "target": "col:reference.project.projec_id"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:reference.project",
+      "target": "col:reference.project.name"
+    },
+    {
       "type": "table_dependency",
       "source": "tbl:business_vault.br_payment",
       "target": "tbl:mwl.mysq_payments"
@@ -218,6 +381,71 @@
       "type": "contains_column",
       "source": "tbl:business_vault.br_payment",
       "target": "col:business_vault.br_payment.sum_usd"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.br_payment",
+      "target": "col:business_vault.br_payment.in_out_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.user_hash_key",
+      "target": "col:mwl.mysq_payments.user_hash_key"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.fake",
+      "target": "col:mwl.users.fake"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.project_id",
+      "target": "col:mwl.mysq_payments.project_id"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.closed_at",
+      "target": "col:mwl.mysq_payments.closed_at"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.operation_id",
+      "target": "col:mwl.mysq_payments.operation_id"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.status",
+      "target": "col:mwl.mysq_payments.status"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.sum",
+      "target": "col:mwl.mysq_payments.sum"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.sum_usd",
+      "target": "col:mwl.mysq_payments.sum_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.in_out_usd",
+      "target": "col:mwl.mysq_payments.closed_at"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.in_out_usd",
+      "target": "col:mwl.mysq_payments.sum_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.in_out_usd",
+      "target": "col:mwl.mysq_payments.user_hash_key"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.br_payment.in_out_usd",
+      "target": "col:mwl.mysq_payments.operation_id"
     },
     {
       "type": "table_dependency",
@@ -278,6 +506,11 @@
       "type": "contains_column",
       "source": "tbl:public.user_daily_kpi",
       "target": "col:public.user_daily_kpi.withdrawal_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.project_name",
+      "target": "col:reference.project.name"
     },
     {
       "type": "column_dependency",

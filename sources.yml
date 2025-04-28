@@ -1,0 +1,17 @@
+mwl.mysq_payments:
+  - user_hash_key
+  - project_id
+  - closed_at
+  - operation_id
+  - status
+  - sum
+  - sum_usd 
+  - operation_id
+mwl.users:
+  - user_hash_key
+  - user_id
+  - projec_id
+  - fake
+reference.project:
+  - projec_id
+  - name

@@ -9,7 +9,10 @@ from pathlib import Path
 # Specify the ABSOLUTE path to the folder containing your SQL models
 # Example: SQL_MODELS_DIR = Path("/path/to/your/sql_models")
 # Or a relative path from where the script is executed:
-SQL_MODELS_DIR = Path("./sql_models")  # Example of a relative path
+SQL_MODELS_DIR = Path("./sql_models")  # SQL script of you data models
+
+# List of source tables (that are used ti build models' tables)
+SQL_SOURCE_MODELS = Path("sources.yml")  # YAML file, describing tables and their columns
 
 # File to save the dependency graph state
 STATE_FILE = Path("./dependency_state.json")

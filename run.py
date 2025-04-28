@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+import yaml
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any, Union, Type, Mapping
 
@@ -623,7 +624,7 @@ def process_columns(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, An
             continue
         ###
 
-        #!!! main_statement
+        # Main_statement
         try:
             # Find all tables used, excluding CTEs defined within the main statement
             all_tables = list(main_statement.find_all(sqlglot.exp.Table))
@@ -697,11 +698,59 @@ def process_columns(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, An
 
             # End of for loop over target_columns
 
-def build_dependency_graph(sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
+def build_source_graph(graph: nx.DiGraph, source_file_list: Path):
+    known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
+
+    def load_source_tables(source_file_list: Path) -> None:
+        """Load source table schemas from YAML file."""
+        try:
+            with open(source_file_list, 'r') as file:
+                source_tables = yaml.safe_load(file)
+            logger.info(f"Loaded source tables: {list(source_tables.keys())}")
+            return source_tables
+        except Exception as e:
+            logger.error(f"Failed to load sources file: {e}")
+            raise
+
+    source_models = load_source_tables(source_file_list)
+
+
+    for table, columns in source_models.items():
+        schema, table_name = table.split('.')
+        model_id = format_node_id(TBL_PREFIX, schema, table_name)
+        # Add a node for the current model (table)
+        try:
+            parsed_model_id_info = parse_node_id(model_id)
+            node_attrs = {
+                "type": TBL_PREFIX,
+                "schema": schema,
+                "name": table_name,
+                "source_type": 'source_table'
+            }
+            graph.add_node(model_id, **node_attrs)
+            logger.debug(f"Model node added: {model_id}")
+        except (ValueError, KeyError) as e:
+            logger.error(f"Error parsing or adding model node {model_id}: {e}")
+            continue
+
+        for col_name in columns:
+            target_col_id = format_node_id(COL_PREFIX, schema, table_name, col_name)
+            col_name_norm = normalize_name(col_name)
+            col_attrs = {
+                "type": COL_PREFIX,
+                "schema": schema,
+                "table": table_name,
+                "column": col_name_norm
+            }
+            print(col_attrs)
+            graph.add_node(target_col_id, **col_attrs)
+            graph.add_edge(model_id, target_col_id, type='contains_column')
+            logger.debug(f"Added node/edge for column: {target_col_id}")
+
+def build_dependency_graph(graph: nx.DiGraph, sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
     """
     Builds a dependency graph of models and columns
     """
-    graph = nx.DiGraph()
     known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
     model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
 
@@ -1028,7 +1077,9 @@ def main():
     previous_graph = load_graph_state(config.STATE_FILE)
 
     # 2. Building current state
-    current_graph, _ = build_dependency_graph(sql_files, config.SQL_MODELS_DIR)
+    graph = nx.DiGraph()
+    build_source_graph(graph, config.SQL_SOURCE_MODELS)
+    current_graph, _ = build_dependency_graph(graph, sql_files, config.SQL_MODELS_DIR)
 
     find_significat_changes(previous_graph, current_graph)
 

@@ -13,7 +13,8 @@ INSERT INTO business_vault.br_payment(
        operation_id,
        status,
        sum,
-       sum_usd
+       sum_usd,
+       in_out_usd
 )
 SELECT mysq_payments.user_hash_key,
        users.fake,
@@ -22,7 +23,17 @@ SELECT mysq_payments.user_hash_key,
        mysq_payments.operation_id,
        mysq_payments.status,
        mysq_payments.sum,
-       mysq_payments.sum_usd / 100.0 AS sum_usd
+       mysq_payments.sum_usd / 100.0 AS sum_usd,
+       SUM(
+              CASE
+                     WHEN mysq_payments.operation_id = 11
+                          THEN 1
+                     ELSE -1
+              END * mysq_payments.sum_usd / 100.0
+       ) OVER (
+              PARTITION BY mysq_payments.user_hash_key
+                  ORDER BY mysq_payments.closed_at DESC
+       ) AS in_out_usd
   FROM mwl.mysq_payments
 
        LEFT JOIN (
