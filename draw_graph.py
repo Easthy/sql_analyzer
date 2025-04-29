@@ -1,10 +1,11 @@
 import json
-import networkx as nx
-import matplotlib.pyplot as plt
-from networkx.readwrite import json_graph
-import warnings
 import math
+import warnings
+
+import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
+from networkx.readwrite import json_graph
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
