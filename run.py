@@ -374,7 +374,7 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
     select_expressions: List[Expression] = []
 
     try:
-        # The code for extracting target_columns and select_expressions remains unchanged
+        # The code for extracting target_columns and select_expressions
         select_part = None
         if isinstance(main_statement, sqlglot.exp.Insert):
             if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
@@ -511,7 +511,7 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[str]]:
             source_table_name_norm = normalize_name(source_table_name)
 
             # Schema from expression or target
-            source_schema = table_expr.db if table_expr.db else target_schema
+            source_schema = table_expr.db if table_expr.db else 'temporary_table'
             source_schema_norm = normalize_name(source_schema)
 
             # Ignore self-reference
