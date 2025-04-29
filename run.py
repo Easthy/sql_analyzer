@@ -157,6 +157,38 @@ def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optio
     logger.debug(f"Файл: {file_path.name}, Схема: {schema}, Таблица: {table_name}")
     return schema, table_name
 
+def parse_source_models(source_file_list: Path) -> List:
+    """
+    Parses source models' definition from yaml file and return dict,
+    containing columns as well
+    """
+    def load_source_tables(source_file_list: Path) -> None:
+        """Load source table schemas from YAML file."""
+        try:
+            with open(source_file_list, 'r') as file:
+                source_tables = yaml.safe_load(file)
+            logger.info(f"Loaded source tables: {list(source_tables.keys())}")
+            return source_tables
+        except Exception as e:
+            logger.error(f"Failed to load sources file: {e}")
+            raise
+
+    logger.info("--- Phase 1: Source models parsing ---")
+    source_models = []
+    parsed_definitions = load_source_tables(source_file_list)
+
+    for table, columns in parsed_definitions.items():
+        schema, table_name = table.split('.')
+        model_id = format_node_id(TBL_PREFIX, schema, table_name)
+        source_models.append({
+            "schema": schema,
+            "name": table_name,
+            "source_type": 'source_table',
+            "columns": columns,
+            "model_id": format_node_id(TBL_PREFIX, schema, table_name)
+        })
+    return source_models
+
 
 def find_main_statement(sql_content: str, target_schema: str, target_table: str) -> Optional[Expression]:
     """
@@ -321,10 +353,177 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
 
     return _cols
 
-def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert):
+def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) -> Dict:
+    model = None
+    relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
+    try:
+        sql_content = file_path.read_text(encoding='utf-8')
+    except Exception as e:
+        logger.error(f"Error reading file {file_path}: {e}")
+        return model
+
+    # Find the main statement (INSERT/CREATE)
+    main_statement = find_main_statement(sql_content, target_schema, target_table)
+    if not main_statement:
+        logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
+        return model
+
+    target_columns: List[str] = []
+    select_expressions: List[Expression] = []
+
+    try:
+        # The code for extracting target_columns and select_expressions remains unchanged
+        select_part = None
+        if isinstance(main_statement, sqlglot.exp.Insert):
+            if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
+                select_part = main_statement.expression.find(sqlglot.exp.Select)
+            target_col_names_explicit = []
+            target_spec = main_statement.this
+            # Handle cases like INSERT INTO schema.table (col1, col2)
+            columns_in_target = None
+            if isinstance(target_spec, sqlglot.exp.Schema) and target_spec.expressions:
+                columns_in_target = target_spec.expressions
+            # Handle cases like INSERT INTO table (col1, col2)
+            elif isinstance(target_spec, sqlglot.exp.Tuple): # Often used for column lists
+                columns_in_target = target_spec.expressions
+
+            if columns_in_target:
+                target_col_names_explicit = [col.name for col in columns_in_target if isinstance(col, sqlglot.exp.Identifier)]
+
+            if target_col_names_explicit:
+                target_columns = target_col_names_explicit
+                if select_part:
+                    select_expressions = select_part.expressions
+            elif select_part:
+                target_columns = [col.alias_or_name for col in select_part.expressions]
+                select_expressions = select_part.expressions
+
+        elif isinstance(main_statement, sqlglot.exp.Create):
+            query_expression = main_statement.expression
+            if isinstance(query_expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
+                 select_part = query_expression.find(sqlglot.exp.Select)
+
+            if select_part:
+                target_columns = [col.alias_or_name for col in select_part.expressions]
+                select_expressions = select_part.expressions
+
+        original_len = len(target_columns)
+        target_columns = [col for col in target_columns if isinstance(col, str)]
+        if len(target_columns) != original_len:
+            logger.warning(f"Some target columns are neither strings nor None and have been skipped in {model_id}")
+
+    except Exception as e:
+        logger.error(f"Error extracting target columns/expressions for {model_id} from {file_path.name}: {e}", exc_info=True)
+        target_columns = []
+        select_expressions = []
+
+    return {
+        "schema": target_schema,
+        "name": target_table,
+        "source_type": 'model',
+        "file_path": relative_path,
+        "columns": target_columns,
+        "main_statement": main_statement,
+        "model_id": model_id
+    }
+
+def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
+    known_models: List[Dict] = [] # List of models defined by files
+    model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
+    # 1. Model Identification by Files
+    logger.info("--- Phase 2: SQL models parsing ---")
+    for file_path in sql_files:
+        schema, table_name = extract_model_name_from_path(file_path, root_dir)
+        if schema and table_name:
+            try:
+                model_id = format_node_id(TBL_PREFIX, schema, table_name)
+                if model_id in model_definitions:
+                    logger.warning(
+                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
+                        f"Using the latest one: {file_path.name}"
+                    )
+                # TODO: Model definitions is used only to verify duplicates. It is better to rewrite
+                model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema, "orig_table_name": table_name}
+                sql_model = parse_sql(model_id, root_dir, file_path, schema, table_name)
+                known_models.append(sql_model)
+
+            except ValueError as e:
+                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
+        else:
+            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
+
+    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
+    return known_models
+
+def find_table_to_table_depencies(models: List):
+    logger.info("--- Phase 3: Find table to table dependencies ---")
+
+    for model in models:
+        if not model.get("source_type") == "model":
+            logger.debug(f"Skipping searching table to table dependency for: {model}")
+            continue
+        # Table-level dependencies
+        source_tables_in_query = []
+        try:
+            main_statement = model.get("main_statement")
+            # Find all tables used, excluding CTEs defined within the main statement
+            all_tables = list(main_statement.find_all(sqlglot.exp.Table))
+            # Searching for CTE
+            ctes_in_scope = set()
+            with_scope = main_statement.find(sqlglot.exp.With)
+            if with_scope:
+                # Normalize CTE names for comparison
+                ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if cte.alias_or_name}
+
+            # Filter tables, keeping only those that are not CTEs
+            source_tables_in_query = [
+                tbl for tbl in all_tables
+                if normalize_name(tbl.name) not in ctes_in_scope
+            ]
+            if ctes_in_scope:
+                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model.get('model_id')}")
+
+        except Exception as e:
+            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
+
+        processed_upstream_models = set()
+        target_schema_norm = normalize_name(model.get('schema'))
+        target_table_norm = normalize_name(model.get('name'))
+
+        for table_expr in source_tables_in_query:
+            source_table_name = table_expr.name
+            source_table_name_norm = normalize_name(source_table_name)
+
+            # Schema from expression or target
+            source_schema = table_expr.db if table_expr.db else target_schema
+            source_schema_norm = normalize_name(source_schema)
+
+            # Ignore self-reference
+            if source_schema_norm == target_schema_norm and source_table_name_norm == target_table_norm:
+                continue
+
+            try:
+                upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
+            except ValueError as e:
+                logger.error(f"ID formatting error for source table {source_schema}.{source_table_name} in {model_id}: {e}")
+                continue
+
+            if upstream_model_id in processed_upstream_models:
+                continue
+            processed_upstream_models.add(upstream_model_id)
+
+            # Adding dependency edge (table depends on other table)
+            if not 'table_dependency' in model:
+                model['table_dependency'] = []
+            model['table_dependency'].append(upstream_model_id)
+
+    return models
+
+def get_column_dependency(model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert) -> List:
     """
     Calculates the dependencies of columns on each other
     """
+    column_dependency = []
     col_name = get_name_from_node_id(target_col_id)
     # --- Lineage Analysis ---
     lineage_target_column = col_name  # Use the column name as the lineage target
@@ -366,426 +565,100 @@ def build_column_dependency_graph(graph: nx.classes.digraph.DiGraph, model_id: s
 
         # Processing the found source columns
         for source_col_id in source_col_ids:
-            try:
-                # Добавляем ребро зависимости колонок: target_col -> source_col
-                if graph.has_node(source_col_id):
-                    graph.add_edge(
-                        target_col_id, source_col_id, type="column_dependency"
-                    )
-                    logger.debug(
-                        f"Added column dependency: {target_col_id} -> {source_col_id}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to add edge {target_col_id} -> {source_col_id}: source node not found."
-                    )
+            column_dependency.append({
+                'target_col_id': target_col_id,
+                'source_col_id': source_col_id
+            })
+            logger.debug(
+                f"Found column dependency: {target_col_id} -> {source_col_id}"
+            )
 
-            except (ValueError, KeyError) as e:
-                logger.error(
-                    f"Error while processing/adding node/edge for source column {actual_source_schema}.{actual_source_table_name}.{source_col_name}: {e}"
-                )
-        # End of loop over source_column_expressions
-    else:
-        logger.debug(
-            f"Lineage did not return a result for column '{col_name}' in {model_id}."
-        )
+    return column_dependency
 
-def process_tables(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, Any]], known_models: Set[str], root_dir: Path):
-    processed_files = 0
-    total_files = len(model_definitions)
+def find_column_to_column_depencies(models: List) -> List:
+    logger.info("--- Phase 4: Find column to column dependencies ---")
 
-    for model_id, model_info in model_definitions.items():
-        processed_files += 1
-        file_path = model_info["file_path"]
-        target_schema = model_info["orig_schema"]
-        target_table = model_info["orig_table_name"]
-        relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
-
-        logger.info(f"[{processed_files}/{total_files}] Analyzing: {relative_path} (Model: {target_schema}.{target_table})")
-
-        try:
-            sql_content = file_path.read_text(encoding='utf-8')
-        except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e}")
+    for model in models:
+        if not model.get("source_type") == "model":
+            logger.debug(f"Skipping searching column to column dependency for: {model}")
             continue
 
-        # Find the main statement (INSERT/CREATE)
-        main_statement = find_main_statement(sql_content, target_schema, target_table)
-        if not main_statement:
-            logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
-            continue
+        model['column_dependency'] = {}
+        for column in model.get('columns'):
+            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
+            model['column_dependency'][column] = get_column_dependency(model.get('model_id'), target_col_id, model.get('main_statement'))
 
+    return models
+
+def draw_nodes(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
+    logger.info("--- Phase 5: Draw nodes ---")
+    for model in models:
         # Add a node for the current model (table)
         try:
-            parsed_model_id_info = parse_node_id(model_id)
             node_attrs = {
                 "type": TBL_PREFIX,
-                "schema": parsed_model_id_info['schema'],
-                "name": parsed_model_id_info['table'],
-                "source_type": 'model',
-                "file_path": relative_path
+                "schema": model.get('schema'),
+                "name": model.get('name'),
+                "source_type": model.get('source_type'),
+                "file_path": model.get('file_path')
             }
-            graph.add_node(model_id, **node_attrs)
-            logger.debug(f"Model node added: {model_id}")
+            graph.add_node(model.get('model_id'), **node_attrs)
+            logger.debug(f"Model node added: {model.get('model_id')}")
         except (ValueError, KeyError) as e:
-            logger.error(f"Error parsing or adding model node {model_id}: {e}")
+            logger.error(f"Error parsing or adding model node {model.get('model_id')}: {e}")
             continue
 
-        # Table-level dependencies
-        source_tables_in_query = []
-        try:
-            # Find all tables used, excluding CTEs defined within the main statement
-            all_tables = list(main_statement.find_all(sqlglot.exp.Table))
-            # Searching for CTE
-            ctes_in_scope = set()
-            with_scope = main_statement.find(sqlglot.exp.With)
-            if with_scope:
-                # Normalize CTE names for comparison
-                ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if cte.alias_or_name}
+        for column in model.get('columns'):
+            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
+            col_name_norm = normalize_name(column)
 
-            # Filter tables, keeping only those that are not CTEs
-            source_tables_in_query = [
-                tbl for tbl in all_tables
-                if normalize_name(tbl.name) not in ctes_in_scope
-            ]
-            if ctes_in_scope:
-                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model_id}")
-
-        except Exception as e:
-            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
-
-        processed_upstream_models = set()
-        target_schema_norm = normalize_name(target_schema)
-        target_table_norm = normalize_name(target_table)
-
-        for table_expr in source_tables_in_query:
-            source_table_name = table_expr.name
-            source_table_name_norm = normalize_name(source_table_name)
-
-            # Schema from expression or target
-            source_schema = table_expr.db if table_expr.db else target_schema
-            source_schema_norm = normalize_name(source_schema)
-
-            # Ignore self-reference
-            if source_schema_norm == target_schema_norm and source_table_name_norm == target_table_norm:
-                continue
-
-            try:
-                upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
-            except ValueError as e:
-                logger.error(f"ID formatting error for source table {source_schema}.{source_table_name} in {model_id}: {e}")
-                continue
-
-            if upstream_model_id in processed_upstream_models:
-                continue
-            processed_upstream_models.add(upstream_model_id)
-
-            # Add source node (table)
-            if not graph.has_node(upstream_model_id):
-                is_known = upstream_model_id in known_models
-                source_type = 'model' if is_known else 'source_table'
-                try:
-                    parsed_upstream_id = parse_node_id(upstream_model_id)
-                    up_attrs = {
-                        "type": TBL_PREFIX,
-                        "schema": parsed_upstream_id['schema'],
-                        "name": parsed_upstream_id['table'],
-                        "source_type": source_type
-                    }
-                    graph.add_node(upstream_model_id, **up_attrs)
-                    logger.debug(f"Source node added: {upstream_model_id} (Type: {source_type})")
-                except (ValueError, KeyError) as e:
-                     logger.error(f"Error adding source node {upstream_model_id}: {e}")
-                     continue # Skipping edge
-
-            # Adding dependency edge (table depends on other table)
-            if graph.has_node(upstream_model_id):
-                graph.add_edge(model_id, upstream_model_id, type='table_dependency')
-                logger.debug(f"Table dependency added: {model_id} -> {upstream_model_id}")
-
-
-        # --- Adding columns' nodes to tables ---
-        target_columns: List[str] = []
-        select_expressions: List[Expression] = []
-
-        try:
-            # The code for extracting target_columns and select_expressions remains unchanged
-            select_part = None
-            if isinstance(main_statement, sqlglot.exp.Insert):
-                if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                     select_part = main_statement.expression.find(sqlglot.exp.Select)
-                target_col_names_explicit = []
-                target_spec = main_statement.this
-                # Handle cases like INSERT INTO schema.table (col1, col2)
-                columns_in_target = None
-                if isinstance(target_spec, sqlglot.exp.Schema) and target_spec.expressions:
-                    columns_in_target = target_spec.expressions
-                # Handle cases like INSERT INTO table (col1, col2)
-                elif isinstance(target_spec, sqlglot.exp.Tuple): # Often used for column lists
-                    columns_in_target = target_spec.expressions
-
-                if columns_in_target:
-                     target_col_names_explicit = [col.name for col in columns_in_target if isinstance(col, sqlglot.exp.Identifier)]
-
-                if target_col_names_explicit:
-                    target_columns = target_col_names_explicit
-                    if select_part:
-                        select_expressions = select_part.expressions
-                elif select_part:
-                    target_columns = [col.alias_or_name for col in select_part.expressions]
-                    select_expressions = select_part.expressions
-
-            elif isinstance(main_statement, sqlglot.exp.Create):
-                query_expression = main_statement.expression
-                if isinstance(query_expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                     select_part = query_expression.find(sqlglot.exp.Select)
-
-                if select_part:
-                    target_columns = [col.alias_or_name for col in select_part.expressions]
-                    select_expressions = select_part.expressions
-
-            original_len = len(target_columns)
-            target_columns = [col for col in target_columns if isinstance(col, str)]
-            if len(target_columns) != original_len:
-                logger.warning(f"Some target columns are neither strings nor None and have been skipped in {model_id}")
-
-        except Exception as e:
-            logger.error(f"Error extracting target columns/expressions for {model_id} from {file_path.name}: {e}", exc_info=True)
-            target_columns = []
-            select_expressions = []
-
-
-        if not target_columns:
-            logger.warning(f"Failed to extract target columns for {model_id}. Lineage analysis for columns will be skipped.")
-        else:
-            logger.debug(f"Target columns for {model_id} (before lineage): {target_columns}")
-            if select_expressions and len(target_columns) != len(select_expressions):
-                logger.warning(
-                    f"The number of target columns ({len(target_columns)}) differs from the number of expressions in the SELECT clause ({len(select_expressions)}) for {model_id}. This may result in inaccurate lineage."
-                )
-
-            parsed_target_id_info = parse_node_id(model_id)
-
-            # Processing each target column
-            for i, col_name in enumerate(target_columns):
-                # col_name is the original name from SQL
-                target_col_sql_expression: Optional[Expression] = None
-                if i < len(select_expressions):
-                     target_col_sql_expression = select_expressions[i]
-
-                try:
-                    target_col_id = format_node_id(COL_PREFIX, parsed_target_id_info['schema'], parsed_target_id_info['table'], col_name)
-                    col_name_norm = normalize_name(col_name)
-
-                    # Adding a target column node
-                    col_attrs = {
-                        "type": COL_PREFIX,
-                        "schema": parsed_target_id_info['schema'],
-                        "table": parsed_target_id_info['table'],
-                        "column": col_name_norm
-                    }
-                    graph.add_node(target_col_id, **col_attrs)
-                    graph.add_edge(model_id, target_col_id, type='contains_column')
-                    logger.debug(f"Added node/edge for column: {target_col_id}")
-
-                except (ValueError, KeyError) as e:
-                    logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
-                except Exception as e:
-                    logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
-
-def process_columns(graph: nx.DiGraph, model_definitions: Dict[str, Dict[str, Any]], known_models: Set[str], root_dir: Path):
-    logger.warning("Searching for columns dependencies")
-    processed_files = 0
-    total_files = len(model_definitions)
-
-    for model_id, model_info in model_definitions.items():
-        logger.warning(f"processing model {model_id}")
-        source_tables_in_query = []
-
-        ###
-        processed_files += 1
-        file_path = model_info["file_path"]
-        target_schema = model_info["orig_schema"]
-        target_table = model_info["orig_table_name"]
-        relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
-
-        logger.info(f"[{processed_files}/{total_files}] Analyzing: {relative_path} (Model: {target_schema}.{target_table})")
-
-        try:
-            sql_content = file_path.read_text(encoding='utf-8')
-        except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e}")
-            continue
-
-        # Find the main statement (INSERT/CREATE)
-        main_statement = find_main_statement(sql_content, target_schema, target_table)
-        if not main_statement:
-            logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
-            continue
-        ###
-
-        # Main_statement
-        try:
-            # Find all tables used, excluding CTEs defined within the main statement
-            all_tables = list(main_statement.find_all(sqlglot.exp.Table))
-            # Searching for CTE
-            ctes_in_scope = set()
-            with_scope = main_statement.find(sqlglot.exp.With)
-            if with_scope:
-                # Normalize CTE names for comparison
-                ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if cte.alias_or_name}
-
-            # Filter tables, keeping only those that are not CTEs
-            source_tables_in_query = [
-                tbl for tbl in all_tables
-                if normalize_name(tbl.name) not in ctes_in_scope
-            ]
-            if ctes_in_scope:
-                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model_id}")
-
-        except Exception as e:
-            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
-
-        for table_expr in source_tables_in_query:
-            # The code for extracting target_columns and select_expressions remains unchanged
-            select_part = None
-            if isinstance(main_statement, sqlglot.exp.Insert):
-                if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                     select_part = main_statement.expression.find(sqlglot.exp.Select)
-                target_col_names_explicit = []
-                target_spec = main_statement.this
-                # Handle cases like INSERT INTO schema.table (col1, col2)
-                columns_in_target = None
-                if isinstance(target_spec, sqlglot.exp.Schema) and target_spec.expressions:
-                    columns_in_target = target_spec.expressions
-                # Handle cases like INSERT INTO table (col1, col2)
-                elif isinstance(target_spec, sqlglot.exp.Tuple): # Often used for column lists
-                    columns_in_target = target_spec.expressions
-
-                if columns_in_target:
-                     target_col_names_explicit = [col.name for col in columns_in_target if isinstance(col, sqlglot.exp.Identifier)]
-
-                if target_col_names_explicit:
-                    target_columns = target_col_names_explicit
-                    if select_part:
-                        select_expressions = select_part.expressions
-                elif select_part:
-                    target_columns = [col.alias_or_name for col in select_part.expressions]
-                    select_expressions = select_part.expressions
-
-            elif isinstance(main_statement, sqlglot.exp.Create):
-                query_expression = main_statement.expression
-                if isinstance(query_expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                     select_part = query_expression.find(sqlglot.exp.Select)
-
-                if select_part:
-                    target_columns = [col.alias_or_name for col in select_part.expressions]
-                    select_expressions = select_part.expressions
-
-            original_len = len(target_columns)
-            target_columns = [col for col in target_columns if isinstance(col, str)]
-
-            for i, col_name in enumerate(target_columns):
-                try:
-                    parsed_target_id_info = parse_node_id(model_id)
-                    target_col_id = format_node_id(COL_PREFIX, parsed_target_id_info['schema'], parsed_target_id_info['table'], col_name)
-                    # Add edges between columns
-                    build_column_dependency_graph(graph, model_id, target_col_id, main_statement)
-                except (ValueError, KeyError) as e:
-                    logger.error(f"Error processing target column '{col_name}' or its dependencies in {model_id}: {e}")
-                except Exception as e:
-                    logger.error(f"Unexpected error while analyzing lineage for column '{col_name}' in {model_id}: {e}", exc_info=True)
-
-            # End of for loop over target_columns
-
-def build_source_graph(graph: nx.DiGraph, source_file_list: Path):
-    known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
-
-    def load_source_tables(source_file_list: Path) -> None:
-        """Load source table schemas from YAML file."""
-        try:
-            with open(source_file_list, 'r') as file:
-                source_tables = yaml.safe_load(file)
-            logger.info(f"Loaded source tables: {list(source_tables.keys())}")
-            return source_tables
-        except Exception as e:
-            logger.error(f"Failed to load sources file: {e}")
-            raise
-
-    source_models = load_source_tables(source_file_list)
-
-
-    for table, columns in source_models.items():
-        schema, table_name = table.split('.')
-        model_id = format_node_id(TBL_PREFIX, schema, table_name)
-        # Add a node for the current model (table)
-        try:
-            parsed_model_id_info = parse_node_id(model_id)
-            node_attrs = {
-                "type": TBL_PREFIX,
-                "schema": schema,
-                "name": table_name,
-                "source_type": 'source_table'
-            }
-            graph.add_node(model_id, **node_attrs)
-            logger.debug(f"Model node added: {model_id}")
-        except (ValueError, KeyError) as e:
-            logger.error(f"Error parsing or adding model node {model_id}: {e}")
-            continue
-
-        for col_name in columns:
-            target_col_id = format_node_id(COL_PREFIX, schema, table_name, col_name)
-            col_name_norm = normalize_name(col_name)
+            # Adding a target column node
             col_attrs = {
                 "type": COL_PREFIX,
-                "schema": schema,
-                "table": table_name,
+                "schema": model.get('schema'),
+                "table": model.get('name'),
                 "column": col_name_norm
             }
-            print(col_attrs)
             graph.add_node(target_col_id, **col_attrs)
-            graph.add_edge(model_id, target_col_id, type='contains_column')
-            logger.debug(f"Added node/edge for column: {target_col_id}")
+    return graph
 
-def build_dependency_graph(graph: nx.DiGraph, sql_files: List[Path], root_dir: Path) -> Tuple[nx.DiGraph, Set[str]]:
-    """
-    Builds a dependency graph of models and columns
-    """
-    known_models: Set[str] = set() # Set of 'tbl:schema.name' for models defined by files
-    model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
+def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
+    logger.info("--- Phase 6: Draw edges ---")
+    for model in models:
+        if 'table_dependency' in model:
+            # Adding dependency edge (table depends on other table)
+            for upstream_model_id in model.get('table_dependency'):
+                if graph.has_node(upstream_model_id):
+                    graph.add_edge(model.get('model_id'), upstream_model_id, type='table_dependency')
+                    logger.debug(f"Table dependency added: {model.get('model_id')} -> {upstream_model_id}")
 
-    # 1. Model Identification by Files
-    logger.info("--- Phase 1: Model Identification ---")
-    for file_path in sql_files:
-        schema, table_name = extract_model_name_from_path(file_path, root_dir)
-        if schema and table_name:
-            try:
-                model_id = format_node_id(TBL_PREFIX, schema, table_name)
-                if model_id in model_definitions:
-                    logger.warning(
-                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
-                        f"Using the latest one: {file_path.name}"
-                    )
-                known_models.add(model_id)
-                model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema, "orig_table_name": table_name}
-            except ValueError as e:
-                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
-        else:
-            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
+        for column in model.get('columns'):
+            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
+            graph.add_edge(model.get('model_id'), target_col_id, type='contains_column')
+            logger.debug(f"Column-Table dependency added: {model.get('model_id')} -> {model.get('upstream_model_id')}")
 
-    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
+        if 'column_dependency' in model:
+            for column, dependencies in model.get('column_dependency').items():
+                for dependency in dependencies:
+                    try:
+                        # Добавляем ребро зависимости колонок: target_col -> source_col
+                        if graph.has_node(dependency.get('source_col_id')):
+                            graph.add_edge(
+                                dependency.get('target_col_id'), dependency.get('source_col_id'), type="column_dependency"
+                            )
+                            logger.debug(
+                                f"Added column dependency: {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to add edge {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}: source node not found."
+                            )
 
-    # 2. Building the graph: table and column nodes, table/column dependencies
-    logger.info("--- Phase 2: Building the dependency graph ---")
-
-    process_tables(graph, model_definitions, known_models, root_dir)
-
-    # Column level dependencies (columns depends on columns)
-    # We have to process column edges after all tables have been connected to their columns, otherwise some columns won't be connected to their source columns
-    process_columns(graph, model_definitions, known_models, root_dir)
-
-    logger.info(f"Graph construction completed. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
-    return graph, known_models
+                    except (ValueError, KeyError) as e:
+                        logger.error(
+                            f"Error while adding edge for source column {model.get('schema')}.{model.get('name')}.{column}: {e}"
+                        )
+    return graph
 
 # --- Graph saving/loading and comparison functions ---
 def save_graph_state(graph: nx.DiGraph, state_file: Path):
@@ -1077,10 +950,24 @@ def main():
     previous_graph = load_graph_state(config.STATE_FILE)
 
     # 2. Building current state
-    graph = nx.DiGraph()
-    build_source_graph(graph, config.SQL_SOURCE_MODELS)
-    current_graph, _ = build_dependency_graph(graph, sql_files, config.SQL_MODELS_DIR)
+    models = []
+    source_models = []
+    sql_models = []
 
+    if config.SQL_SOURCE_MODELS.is_file():
+        source_models = parse_source_models(config.SQL_SOURCE_MODELS)
+
+    sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
+    models = source_models + sql_models
+
+    models = find_table_to_table_depencies(models)
+    models = find_column_to_column_depencies(models)
+
+    current_graph = nx.DiGraph()
+    current_graph = draw_nodes(current_graph, models)
+    current_graph = draw_edges(current_graph, models)
+
+    # 3. Changes
     find_significat_changes(previous_graph, current_graph)
 
     # 4. Save current graph state

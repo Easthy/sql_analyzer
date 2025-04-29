@@ -6,64 +6,66 @@
     {
       "type": "tbl",
       "schema": "mwl",
-      "name": "mysq_payments",
+      "name": "mysql_payments",
       "source_type": "source_table",
-      "id": "tbl:mwl.mysq_payments"
+      "file_path": null,
+      "id": "tbl:mwl.mysql_payments"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "user_hash_key",
-      "id": "col:mwl.mysq_payments.user_hash_key"
+      "id": "col:mwl.mysql_payments.user_hash_key"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "project_id",
-      "id": "col:mwl.mysq_payments.project_id"
+      "id": "col:mwl.mysql_payments.project_id"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "closed_at",
-      "id": "col:mwl.mysq_payments.closed_at"
+      "id": "col:mwl.mysql_payments.closed_at"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "operation_id",
-      "id": "col:mwl.mysq_payments.operation_id"
+      "id": "col:mwl.mysql_payments.operation_id"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "status",
-      "id": "col:mwl.mysq_payments.status"
+      "id": "col:mwl.mysql_payments.status"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "sum",
-      "id": "col:mwl.mysq_payments.sum"
+      "id": "col:mwl.mysql_payments.sum"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "mysq_payments",
+      "table": "mysql_payments",
       "column": "sum_usd",
-      "id": "col:mwl.mysq_payments.sum_usd"
+      "id": "col:mwl.mysql_payments.sum_usd"
     },
     {
       "type": "tbl",
       "schema": "mwl",
       "name": "users",
       "source_type": "source_table",
+      "file_path": null,
       "id": "tbl:mwl.users"
     },
     {
@@ -99,6 +101,7 @@
       "schema": "reference",
       "name": "project",
       "source_type": "source_table",
+      "file_path": null,
       "id": "tbl:reference.project"
     },
     {
@@ -195,14 +198,6 @@
       "id": "tbl:public.total_stat"
     },
     {
-      "type": "tbl",
-      "schema": "public",
-      "name": "user_daily_kpi",
-      "source_type": "model",
-      "file_path": "public/public.user_daily_kpi.sql",
-      "id": "tbl:public.user_daily_kpi"
-    },
-    {
       "type": "col",
       "schema": "public",
       "table": "total_stat",
@@ -229,6 +224,14 @@
       "table": "total_stat",
       "column": "withdrawal_usd",
       "id": "col:public.total_stat.withdrawal_usd"
+    },
+    {
+      "type": "tbl",
+      "schema": "public",
+      "name": "user_daily_kpi",
+      "source_type": "model",
+      "file_path": "public/public.user_daily_kpi.sql",
+      "id": "tbl:public.user_daily_kpi"
     },
     {
       "type": "col",
@@ -269,38 +272,38 @@
   "links": [
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.user_hash_key"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.user_hash_key"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.project_id"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.project_id"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.closed_at"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.closed_at"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.operation_id"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.operation_id"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.status"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.status"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.sum"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.sum"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.mysq_payments",
-      "target": "col:mwl.mysq_payments.sum_usd"
+      "source": "tbl:mwl.mysql_payments",
+      "target": "col:mwl.mysql_payments.sum_usd"
     },
     {
       "type": "contains_column",
@@ -335,7 +338,7 @@
     {
       "type": "table_dependency",
       "source": "tbl:business_vault.br_payment",
-      "target": "tbl:mwl.mysq_payments"
+      "target": "tbl:mwl.mysql_payments"
     },
     {
       "type": "table_dependency",
@@ -390,7 +393,7 @@
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.user_hash_key",
-      "target": "col:mwl.mysq_payments.user_hash_key"
+      "target": "col:mwl.mysql_payments.user_hash_key"
     },
     {
       "type": "column_dependency",
@@ -400,52 +403,52 @@
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.project_id",
-      "target": "col:mwl.mysq_payments.project_id"
+      "target": "col:mwl.mysql_payments.project_id"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.closed_at",
-      "target": "col:mwl.mysq_payments.closed_at"
+      "target": "col:mwl.mysql_payments.closed_at"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.operation_id",
-      "target": "col:mwl.mysq_payments.operation_id"
+      "target": "col:mwl.mysql_payments.operation_id"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.status",
-      "target": "col:mwl.mysq_payments.status"
+      "target": "col:mwl.mysql_payments.status"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.sum",
-      "target": "col:mwl.mysq_payments.sum"
+      "target": "col:mwl.mysql_payments.sum"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.sum_usd",
-      "target": "col:mwl.mysq_payments.sum_usd"
+      "target": "col:mwl.mysql_payments.sum_usd"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysq_payments.closed_at"
+      "target": "col:mwl.mysql_payments.sum_usd"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysq_payments.sum_usd"
+      "target": "col:mwl.mysql_payments.operation_id"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysq_payments.user_hash_key"
+      "target": "col:mwl.mysql_payments.user_hash_key"
     },
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysq_payments.operation_id"
+      "target": "col:mwl.mysql_payments.closed_at"
     },
     {
       "type": "table_dependency",
@@ -476,6 +479,26 @@
       "type": "contains_column",
       "source": "tbl:public.total_stat",
       "target": "col:public.total_stat.withdrawal_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.project_name",
+      "target": "col:reference.project.name"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.date",
+      "target": "col:public.user_daily_kpi.date"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.deposit_usd",
+      "target": "col:public.user_daily_kpi.deposit_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.total_stat.withdrawal_usd",
+      "target": "col:public.user_daily_kpi.withdrawal_usd"
     },
     {
       "type": "table_dependency",
@@ -509,26 +532,6 @@
     },
     {
       "type": "column_dependency",
-      "source": "col:public.total_stat.project_name",
-      "target": "col:reference.project.name"
-    },
-    {
-      "type": "column_dependency",
-      "source": "col:public.total_stat.date",
-      "target": "col:public.user_daily_kpi.date"
-    },
-    {
-      "type": "column_dependency",
-      "source": "col:public.total_stat.deposit_usd",
-      "target": "col:public.user_daily_kpi.deposit_usd"
-    },
-    {
-      "type": "column_dependency",
-      "source": "col:public.total_stat.withdrawal_usd",
-      "target": "col:public.user_daily_kpi.withdrawal_usd"
-    },
-    {
-      "type": "column_dependency",
       "source": "col:public.user_daily_kpi.user_hash_key",
       "target": "col:business_vault.br_payment.user_hash_key"
     },
@@ -545,22 +548,22 @@
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.deposit_usd",
-      "target": "col:business_vault.br_payment.operation_id"
+      "target": "col:business_vault.br_payment.sum_usd"
     },
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.deposit_usd",
-      "target": "col:business_vault.br_payment.sum_usd"
-    },
-    {
-      "type": "column_dependency",
-      "source": "col:public.user_daily_kpi.withdrawal_usd",
       "target": "col:business_vault.br_payment.operation_id"
     },
     {
       "type": "column_dependency",
       "source": "col:public.user_daily_kpi.withdrawal_usd",
       "target": "col:business_vault.br_payment.sum_usd"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:public.user_daily_kpi.withdrawal_usd",
+      "target": "col:business_vault.br_payment.operation_id"
     }
   ]
 }

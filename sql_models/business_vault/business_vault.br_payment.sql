@@ -16,25 +16,25 @@ INSERT INTO business_vault.br_payment(
        sum_usd,
        in_out_usd
 )
-SELECT mysq_payments.user_hash_key,
+SELECT mysql_payments.user_hash_key,
        users.fake,
-       mysq_payments.project_id,
-       mysq_payments.closed_at,
-       mysq_payments.operation_id,
-       mysq_payments.status,
-       mysq_payments.sum,
-       mysq_payments.sum_usd / 100.0 AS sum_usd,
+       mysql_payments.project_id,
+       mysql_payments.closed_at,
+       mysql_payments.operation_id,
+       mysql_payments.status,
+       mysql_payments.sum,
+       mysql_payments.sum_usd / 100.0 AS sum_usd,
        SUM(
               CASE
-                     WHEN mysq_payments.operation_id = 11
+                     WHEN mysql_payments.operation_id = 11
                           THEN 1
                      ELSE -1
-              END * mysq_payments.sum_usd / 100.0
+              END * mysql_payments.sum_usd / 100.0
        ) OVER (
-              PARTITION BY mysq_payments.user_hash_key
-                  ORDER BY mysq_payments.closed_at DESC
+              PARTITION BY mysql_payments.user_hash_key
+                  ORDER BY mysql_payments.closed_at DESC
        ) AS in_out_usd
-  FROM mwl.mysq_payments
+  FROM mwl.mysql_payments
 
        LEFT JOIN (
               SELECT users.user_hash_key,
@@ -42,7 +42,7 @@ SELECT mysq_payments.user_hash_key,
                 FROM mwl.users
                WHERE users.project_id NOT IN (4, 5, 6)
        ) AS users
- WHERE mysq_payments.closed_at >= CURRENT_DATE - 30
+ WHERE mysql_payments.closed_at >= CURRENT_DATE - 30
 ;
 
 END TRANSACTION;

@@ -1,4 +1,4 @@
-mwl.mysq_payments:
+mwl.mysql_payments:
   - user_hash_key
   - project_id
   - closed_at
