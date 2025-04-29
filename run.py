@@ -128,12 +128,12 @@ def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
 
 # --- File and SQL handling functions ---
 def find_sql_files(directory: Path) -> List[Path]:
-    """Рекурсивно находит все файлы .sql в указанной директории."""
+    """Recursively finds all .sql files in the specified directory"""
     logger.info(f"Searching for SQL files in: {directory}")
     sql_files = list(directory.rglob(f"*{getattr(config, 'SQL_FILE_EXTENSION', '.sql')}"))
     logger.info(f"Found {len(sql_files)} SQL files.")
     if not sql_files:
-        logger.warning(f"В директории {directory} не найдено файлов с расширением {getattr(config, 'SQL_FILE_EXTENSION', '.sql')}")
+        logger.warning(f"No files with extension {getattr(config, 'SQL_FILE_EXTENSION', '.sql')} found in the folder {directory}")
     return sql_files
 
 def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optional[str], Optional[str]]:
@@ -146,15 +146,15 @@ def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optio
 
     if len(name_parts) < 2:
         logger.warning(
-            f"Не удалось определить схему и таблицу из имени файла: '{file_path.name}'. "
-            f"Ожидаемый формат: 'schema.table.sql'. Файл будет пропущен."
+            f"Failed to get schema and table from the filename: '{file_path.name}'. "
+            f"Expected format: 'schema.table.sql'. File will be skipped"
         )
         return None, None
 
     schema = name_parts[0]
     table_name = '.'.join(name_parts[1:])
 
-    logger.debug(f"Файл: {file_path.name}, Схема: {schema}, Таблица: {table_name}")
+    logger.debug(f"File: {file_path.name}, Schema: {schema}, Table: {table_name}")
     return schema, table_name
 
 def parse_source_models(source_file_list: Path) -> List:
