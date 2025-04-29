@@ -70,7 +70,7 @@ def format_node_id(node_type: str, schema: Optional[str], name: Optional[str], c
     else:
         raise ValueError(f"Unknown node type: {node_type}")
 
-def get_name_from_node_id(node_id: str) -> str:
+def get_name_from_node_id(node_id: str) -> Dict:
     """
     Extracts the table or column name from a node ID.
 
@@ -82,7 +82,7 @@ def get_name_from_node_id(node_id: str) -> str:
         try:
             _, schema_table = node_id.split(":", 1)
             schema, table = schema_table.split(".", 1)
-            return table
+            return {"schema": schema, "table": table}
         except ValueError:
             raise ValueError(f"Invalid table node_id format: {node_id}")
     elif node_id.startswith(f"{COL_PREFIX}:"):
@@ -90,7 +90,7 @@ def get_name_from_node_id(node_id: str) -> str:
         try:
             _, schema_table_col = node_id.split(":", 1)
             schema, table, column = schema_table_col.split(".", 2)
-            return column
+            return {"schema": schema, "table": table, "column": column}
         except ValueError:
             raise ValueError(f"Invalid column node_id format: {node_id}")
     else:
@@ -307,7 +307,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     sources: List[sqlglot.exp.Column] = []
     processed_node_ids = set()
 
-    target_col_name = get_name_from_node_id(target_col_id)
+    target_col_name = get_name_from_node_id(target_col_id).get('column')
 
     _cols = []
     def traverse(current_node: LineageNode):
@@ -428,12 +428,17 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
     }
 
 def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
+    processed_files = 0
+    total_files = len(sql_files)
+
     known_models: List[Dict] = [] # List of models defined by files
     model_definitions: Dict[str, Dict[str, Any]] = {} # model_id -> {file_path, schema, table_name}
     # 1. Model Identification by Files
     logger.info("--- Phase 2: SQL models parsing ---")
     for file_path in sql_files:
+        processed_files += 1
         schema, table_name = extract_model_name_from_path(file_path, root_dir)
+        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Model: {schema}.{table_name})")
         if schema and table_name:
             try:
                 model_id = format_node_id(TBL_PREFIX, schema, table_name)
@@ -455,8 +460,10 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
     logger.info(f"Detected {len(known_models)} models with SQL definitions.")
     return known_models
 
-def find_table_to_table_depencies(models: List):
-    logger.info("--- Phase 3: Find table to table dependencies ---")
+def find_table_to_table_depencies(models: List) -> List:
+    logger.info("--- Phase 3: Searching for table to table dependencies ---")
+    source_model_ids = set()
+    source_models = []
 
     for model in models:
         if not model.get("source_type") == "model":
@@ -512,19 +519,33 @@ def find_table_to_table_depencies(models: List):
                 continue
             processed_upstream_models.add(upstream_model_id)
 
+            # Detecting source models
+            if upstream_model_id not in [model.get('model_id') for model in models]:
+                source_model_ids.add(upstream_model_id)
+
             # Adding dependency edge (table depends on other table)
             if not 'table_dependency' in model:
                 model['table_dependency'] = []
             model['table_dependency'].append(upstream_model_id)
 
-    return models
+    if len(source_model_ids) > 0:
+        for model_id in source_model_ids:
+            model = get_name_from_node_id(model_id)
+            source_models.append({
+                "schema": model.get("schema"),
+                "name": model.get("table"),
+                "source_type": 'source_table',
+                "model_id": model_id
+            })
+        logger.info(f"Found {len(source_model_ids)} source model(s) that have not been included into sources description file {config.SQL_SOURCE_MODELS}")
+    return models, source_models
 
 def get_column_dependency(model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert) -> List:
     """
     Calculates the dependencies of columns on each other
     """
     column_dependency = []
-    col_name = get_name_from_node_id(target_col_id)
+    col_name = get_name_from_node_id(target_col_id).get('column')
     # --- Lineage Analysis ---
     lineage_target_column = col_name  # Use the column name as the lineage target
     lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
@@ -576,7 +597,7 @@ def get_column_dependency(model_id: str, target_col_id: str, main_statement: sql
     return column_dependency
 
 def find_column_to_column_depencies(models: List) -> List:
-    logger.info("--- Phase 4: Find column to column dependencies ---")
+    logger.info("--- Phase 4: Searching for column to column dependencies ---")
 
     for model in models:
         if not model.get("source_type") == "model":
@@ -608,18 +629,21 @@ def draw_nodes(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.di
             logger.error(f"Error parsing or adding model node {model.get('model_id')}: {e}")
             continue
 
-        for column in model.get('columns'):
-            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
-            col_name_norm = normalize_name(column)
+        columns = model.get('columns', [])
+        if len(columns) > 0:
+            for column in columns:
+                target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
+                col_name_norm = normalize_name(column)
 
-            # Adding a target column node
-            col_attrs = {
-                "type": COL_PREFIX,
-                "schema": model.get('schema'),
-                "table": model.get('name'),
-                "column": col_name_norm
-            }
-            graph.add_node(target_col_id, **col_attrs)
+                # Adding a target column node
+                col_attrs = {
+                    "type": COL_PREFIX,
+                    "schema": model.get('schema'),
+                    "table": model.get('name'),
+                    "column": col_name_norm
+                }
+                graph.add_node(target_col_id, **col_attrs)
+                logger.debug(f"Added colum node {col_name_norm} for {model.get('model_id')}.")
     return graph
 
 def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
@@ -630,12 +654,16 @@ def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.di
             for upstream_model_id in model.get('table_dependency'):
                 if graph.has_node(upstream_model_id):
                     graph.add_edge(model.get('model_id'), upstream_model_id, type='table_dependency')
-                    logger.debug(f"Table dependency added: {model.get('model_id')} -> {upstream_model_id}")
+                    logger.debug(f"Table <-> Table dependency added: {model.get('model_id')} -> {upstream_model_id}")
 
-        for column in model.get('columns'):
-            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
-            graph.add_edge(model.get('model_id'), target_col_id, type='contains_column')
-            logger.debug(f"Column-Table dependency added: {model.get('model_id')} -> {model.get('upstream_model_id')}")
+        columns = model.get('columns', [])
+        if len(columns) > 0:
+            for column in columns:
+                target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
+                graph.add_edge(model.get('model_id'), target_col_id, type='contains_column')
+                logger.debug(f"Column <-> Table dependency added: {model.get('model_id')} -> {model.get('upstream_model_id')}")
+        else:
+            logger.debug(f"There are no columns for the model: {model.get('model_id')}")
 
         if 'column_dependency' in model:
             for column, dependencies in model.get('column_dependency').items():
@@ -647,7 +675,7 @@ def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.di
                                 dependency.get('target_col_id'), dependency.get('source_col_id'), type="column_dependency"
                             )
                             logger.debug(
-                                f"Added column dependency: {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}"
+                                f"Column <-> Column dependency added: {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}"
                             )
                         else:
                             logger.warning(
@@ -956,11 +984,14 @@ def main():
 
     if config.SQL_SOURCE_MODELS.is_file():
         source_models = parse_source_models(config.SQL_SOURCE_MODELS)
+    else:
+        logger.info("Source models' file was not provided. Source models will be detected from SQL scripts")
 
     sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
     models = source_models + sql_models
 
-    models = find_table_to_table_depencies(models)
+    models, source_models = find_table_to_table_depencies(models)
+    models = models + source_models
     models = find_column_to_column_depencies(models)
 
     current_graph = nx.DiGraph()

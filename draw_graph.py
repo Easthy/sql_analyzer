@@ -18,8 +18,8 @@ COLUMN_EDGE_COLOR = 'gray'
 FONT_SIZE = 7
 COLUMN_OFFSET_RADIUS = 0.15
 FIGURE_SIZE = (20, 15)
-LAYOUT_K = 0.9
-LAYOUT_ITERATIONS = 150
+LAYOUT_K = 0.97
+LAYOUT_ITERATIONS = 170
 TABLE_ARROW_SIZE = 15 # Slightly larger arrows for table dependencies
 COLUMN_ARROW_SIZE = 10
 # ---
@@ -146,6 +146,7 @@ if other_edges:
         arrows=True,
         arrowstyle='-|>',
         arrowsize=12,
+        connectionstyle='arc3,rad=0.15', # Less curve perhaps
         node_size=node_sizes
     )
 
@@ -171,4 +172,3 @@ plt.tight_layout()
 print("Saving graph...")
 plt.savefig("graph_output.png", dpi=300, bbox_inches='tight')
 print("Graph saved as graph_output.png")
-# plt.show()
