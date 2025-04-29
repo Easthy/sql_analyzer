@@ -4,3 +4,7 @@
 
 #### An example of the graph is shown in graph_output.png.
 ![alt text](https://github.com/Easthy/sql_analyzer/blob/main/graph_output.png)
+
+#### Issues
+- There is a problem if the DISTKEY is defined right after a column's data type (sqlglot throws an error). It should be defined after all columns
+- There is a problem handling temporary table dependencies if they are used to build the model
