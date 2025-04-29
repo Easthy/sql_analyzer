@@ -189,7 +189,6 @@ def parse_source_models(source_file_list: Path) -> List:
         })
     return source_models
 
-
 def find_main_statement(sql_content: str, target_schema: str, target_table: str) -> Optional[Expression]:
     """
     Parses the SQL and finds the 'main' statement (INSERT or CREATE) that defines the target table
@@ -354,6 +353,9 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     return _cols
 
 def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) -> Dict:
+    """
+    Parses input model's SQL file
+    """
     model = None
     relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
     try:
@@ -428,6 +430,9 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
     }
 
 def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
+    """
+    Parses in a loop each model's SQL file
+    """
     processed_files = 0
     total_files = len(sql_files)
 
@@ -460,7 +465,11 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
     logger.info(f"Detected {len(known_models)} models with SQL definitions.")
     return known_models
 
-def find_table_to_table_depencies(models: List) -> List:
+def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[str]]:
+    """
+    Searches for dependencies between models and adds a list of tables each model depends on. 
+    Also finds a list of models not described in the sources
+    """
     logger.info("--- Phase 3: Searching for table to table dependencies ---")
     source_model_ids = set()
     source_models = []
@@ -510,6 +519,7 @@ def find_table_to_table_depencies(models: List) -> List:
                 continue
 
             try:
+                # model_id depends on upstream_model_id
                 upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
             except ValueError as e:
                 logger.error(f"ID formatting error for source table {source_schema}.{source_table_name} in {model_id}: {e}")
@@ -537,12 +547,12 @@ def find_table_to_table_depencies(models: List) -> List:
                 "source_type": 'source_table',
                 "model_id": model_id
             })
-        logger.info(f"Found {len(source_model_ids)} source model(s) that have not been included into sources description file {config.SQL_SOURCE_MODELS}")
+        logger.info(f"Found {len(source_model_ids)} source model that have not been included into sources description file {config.SQL_SOURCE_MODELS}")
     return models, source_models
 
 def get_column_dependency(model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert) -> List:
     """
-    Calculates the dependencies of columns on each other
+    Searches for dependencies for the specified input column
     """
     column_dependency = []
     col_name = get_name_from_node_id(target_col_id).get('column')
@@ -597,6 +607,9 @@ def get_column_dependency(model_id: str, target_col_id: str, main_statement: sql
     return column_dependency
 
 def find_column_to_column_depencies(models: List) -> List:
+    """
+    Searches for column dependencies on other columns and adds this information to each model
+    """
     logger.info("--- Phase 4: Searching for column to column dependencies ---")
 
     for model in models:
@@ -612,6 +625,9 @@ def find_column_to_column_depencies(models: List) -> List:
     return models
 
 def draw_nodes(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
+    """
+    Adds nodes on graph for tables and columns
+    """
     logger.info("--- Phase 5: Draw nodes ---")
     for model in models:
         # Add a node for the current model (table)
@@ -647,6 +663,9 @@ def draw_nodes(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.di
     return graph
 
 def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
+    """
+    Adds edges on graph between table-table, table-columns, column-column
+    """
     logger.info("--- Phase 6: Draw edges ---")
     for model in models:
         if 'table_dependency' in model:
@@ -819,8 +838,10 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
     logger.info(f"Found {len(affected['tables'])} dependent tables and {len(affected['columns'])} dependent columns for '{search_node_id}'.")
     return affected
 
-def find_significat_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGraph):
-    # Comparing states and analyzing the impact of deletions/changes
+def find_significant_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGraph):
+    """
+    Comparing states and analyzing the impact of deletions/changes
+    """
     if previous_graph:
         logger.info("-" * 30)
         logger.info("Comparing with the previous state:")
@@ -985,7 +1006,7 @@ def main():
     if config.SQL_SOURCE_MODELS.is_file():
         source_models = parse_source_models(config.SQL_SOURCE_MODELS)
     else:
-        logger.info("Source models' file was not provided. Source models will be detected from SQL scripts")
+        logger.info("Skipping Phase 1 as source models' file was not provided. Source models will be detected from SQL scripts")
 
     sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
     models = source_models + sql_models
@@ -999,7 +1020,7 @@ def main():
     current_graph = draw_edges(current_graph, models)
 
     # 3. Changes
-    find_significat_changes(previous_graph, current_graph)
+    find_significant_changes(previous_graph, current_graph)
 
     # 4. Save current graph state
     save_graph_state(current_graph, config.STATE_FILE)
