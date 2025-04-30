@@ -3,7 +3,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Set, Any
+from typing import List, Dict, Tuple, Optional, Set, Any, Optional
 
 import networkx as nx
 import sqlglot
@@ -169,7 +169,7 @@ def parse_source_models(source_file_list: Path) -> List:
     containing columns as well
     """
 
-    def load_source_tables(source_file_list: Path) -> None:
+    def load_source_tables(source_file_list: Path) -> Dict:
         """Load source table schemas from YAML file."""
         try:
             with open(source_file_list, 'r') as file:
@@ -201,7 +201,6 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
     """
     Parses the SQL and finds the 'main' statement (INSERT or CREATE) that defines the target table
     """
-    expressions: List[Expression] = []
     try:
         expressions = sqlglot.parse(sql_content, read=getattr(config, 'SQL_DIALECT', None))
     except ParseError as e:
@@ -319,7 +318,6 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     sqlglot.exp.Column expressions that represent terminal sources
     (i.e., leaf Column nodes in the lineage tree with table information).
     """
-    sources: List[sqlglot.exp.Column] = []
     processed_node_ids = set()
 
     target_col_name = get_name_from_node_id(target_col_id).get('column')
@@ -331,10 +329,6 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
         if node_id in processed_node_ids:
             return
         processed_node_ids.add(node_id)
-
-        # Compare normalized names to avoid accidentally adding the target itself as a source
-        # (even though lineage usually doesn't return it as a leaf)
-        is_target_node = normalize_name(current_node.name) == normalize_name(target_col_name)
 
         # Check if the current node is a leaf in the lineage tree
         is_leaf_node = not current_node.downstream
@@ -370,7 +364,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     return _cols
 
 
-def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) -> Dict:
+def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) -> Optional[Dict]:
     """
     Parses input model's SQL file
     """
@@ -389,7 +383,6 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
         return model
 
     target_columns: List[str] = []
-    select_expressions: List[Expression] = []
 
     try:
         # The code for extracting target_columns and select_expressions
@@ -413,11 +406,9 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
 
             if target_col_names_explicit:
                 target_columns = target_col_names_explicit
-                if select_part:
-                    select_expressions = select_part.expressions
+
             elif select_part:
                 target_columns = [col.alias_or_name for col in select_part.expressions]
-                select_expressions = select_part.expressions
 
         elif isinstance(main_statement, sqlglot.exp.Create):
             query_expression = main_statement.expression
@@ -426,7 +417,6 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
 
             if select_part:
                 target_columns = [col.alias_or_name for col in select_part.expressions]
-                select_expressions = select_part.expressions
 
         original_len = len(target_columns)
         target_columns = [col for col in target_columns if isinstance(col, str)]
@@ -437,7 +427,6 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
         logger.error(f"Error extracting target columns/expressions for {model_id} from {file_path.name}: {e}",
                      exc_info=True)
         target_columns = []
-        select_expressions = []
 
     return {
         "schema": target_schema,
@@ -487,8 +476,7 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
     logger.info(f"Detected {len(known_models)} models with SQL definitions.")
     return known_models
 
-
-def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[str]]:
+def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[str, str | None | Any]]]:
     """
     Searches for dependencies between models and adds a list of tables each model depends on. 
     Also finds a list of models not described in the sources
