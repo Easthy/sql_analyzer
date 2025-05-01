@@ -7,4 +7,4 @@
 
 #### Issues
 - There is a problem if the DISTKEY is defined right after a column's data type (sqlglot throws an error). It should be defined after all columns
-- There is a problem handling temporary table dependencies if they are used to build the model
+- Columns' names in the insert and select statements must be the same

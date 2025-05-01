@@ -11,6 +11,7 @@ import yaml
 from networkx.readwrite import json_graph
 from rich.logging import RichHandler
 from sqlglot import Expression
+import sqlglot.expressions as exp
 from sqlglot.errors import ParseError
 from sqlglot.lineage import Node as LineageNode
 from sqlglot.lineage import lineage as sqlglot_lineage
@@ -334,7 +335,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
         is_leaf_node = not current_node.downstream
 
         if is_leaf_node:
-            table_schema = str(current_node.source).split('.')[0]
+            table_schema = str(current_node.source).split('.')[0] if '.' in str(current_node.source) else '_temp'
             table_name = current_node.name.split('.')[0]
             column = current_node.name.split('.')[1]
 
@@ -438,43 +439,249 @@ def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) 
         "model_id": model_id
     }
 
-
-def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List:
+def extract_statement_info(statement: exp.Expression, file_model_id: str, file_path_str: str) -> Optional[Dict[str, Any]]:
     """
-    Parses in a loop each model's SQL file
+    Extracts table creation or insertion details from a single SQL statement.
+    Returns a dictionary describing the operation or None if not relevant.
+    """
+    operation_info = None
+    target_columns: List[str] = []
+    select_expression: Optional[exp.Expression] = None
+    target_table_expr: Optional[exp.Table] = None
+    target_schema: Optional[str] = None
+    target_table: Optional[str] = None
+    is_temporary: bool = False
+    operation_type: Optional[str] = None
+
+    try:
+        if isinstance(statement, exp.Create):
+            # Interested in CREATE TABLE statements
+            if statement.kind and statement.kind.upper() == 'TABLE':
+                operation_type = 'CREATE'
+                target_table_expr = statement.this.find(exp.Table)
+                if not target_table_expr:
+                    logger.warning(f"Could not find target table in CREATE statement: {statement.sql()}")
+                    return None
+
+                target_schema = target_table_expr.db # Schema name
+                target_table = target_table_expr.name # Table name
+                is_temporary = statement.args.get('temporary', False)
+
+                # Check for columns definition
+                # 1. From explicit column list: CREATE TABLE name (col1 type, ...)
+                schema_def = statement.this.find(exp.Schema)
+                if schema_def and schema_def.expressions: # Check if column definitions exist
+                    target_columns = [
+                        col.this.name for col in schema_def.expressions
+                        if isinstance(col, exp.ColumnDef) and isinstance(col.this, exp.Identifier)
+                    ]
+
+                # 2. From a SELECT statement: CREATE TABLE name AS SELECT ...
+                if isinstance(statement.expression, (exp.Select, exp.Union)):
+                    select_expression = statement.expression
+                    # Try to get columns from SELECT if not explicitly defined
+                    if not target_columns:
+                        select_part = select_expression.find(exp.Select)
+                        if select_part:
+                             target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name is not None]
+
+
+        elif isinstance(statement, exp.Insert):
+            operation_type = 'INSERT'
+            target_table_expr = statement.this.find(exp.Table)
+            if not target_table_expr:
+                logger.warning(f"Could not find target table in INSERT statement: {statement.sql()}")
+                return None
+
+            target_schema = target_table_expr.db
+            target_table = target_table_expr.name
+            # Assume table is temporary if its name matches a previously created temp table
+            # (This requires state tracking across statements, which is complex here.
+            # A simpler approach is to check the CREATE statement for the temporary flag)
+            # We will mark the operation based on the info available IN THIS statement.
+            # The caller might correlate it later if needed.
+
+            # Extract target columns if explicitly listed: INSERT INTO tbl (col1, col2) ...
+            columns_in_target = None
+            # target_spec might be exp.Schema (for qualified names like schema.tbl(col1))
+            # or exp.Tuple (for unqualified names like tbl(col1))
+            target_spec = statement.this
+            if isinstance(target_spec, exp.Schema) and target_spec.expressions:
+                 # Check if the expressions following the table are columns
+                 if all(isinstance(e, exp.Identifier) for e in target_spec.expressions):
+                     columns_in_target = target_spec.expressions
+            elif isinstance(target_spec, exp.Tuple): # Often used for column lists directly after table name
+                 columns_in_target = target_spec.expressions
+            # Check the 'alias' argument which sometimes holds the column list
+            elif 'alias' in statement.args and isinstance(statement.args['alias'], exp.Tuple):
+                 columns_in_target = statement.args['alias'].expressions
+
+            if columns_in_target:
+                target_columns = [
+                    col.name for col in columns_in_target if isinstance(col, exp.Identifier)
+                ]
+
+            # Extract the source SELECT/VALUES etc.
+            if isinstance(statement.expression, (exp.Select, exp.Union)):
+                select_expression = statement.expression
+                # If target columns weren't explicit, derive from SELECT
+                if not target_columns:
+                    select_part = select_expression.find(exp.Select)
+                    if select_part:
+                        target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name is not None]
+
+
+        # If we identified a relevant operation, build the dict
+        if operation_type and target_table:
+            # Clean up columns - ensure they are strings
+            original_len = len(target_columns)
+            target_columns = [col for col in target_columns if isinstance(col, str)]
+            if len(target_columns) != original_len:
+                 logger.warning(f"Some target columns were skipped (not strings) for {target_schema}.{target_table} in {file_path_str}")
+
+            target_schema = target_schema if target_schema else '_temp'
+            operation_info =  {
+                "schema": target_schema,
+                "name": target_table,
+                "source_type": 'model',
+                "file_path": file_path_str,
+                "columns": target_columns,
+                "main_statement": statement,
+                "model_id": format_node_id(TBL_PREFIX, target_schema, target_table)
+            }
+
+    except Exception as e:
+        logger.error(f"Error processing statement in {file_path_str}: {statement.sql() if statement else 'N/A'}. Error: {e}", exc_info=True)
+        return None # Skip this statement on error
+
+    return operation_info
+
+def parse_sql_file(model_id: str, root_dir: Path, file_path: Path) -> List[Dict]:
+    """
+    Parses an entire SQL file, extracting info about CREATE/INSERT operations.
+
+    Returns:
+        A list of dictionaries, each describing a CREATE or INSERT operation found.
+    """
+    parsed_operations: List[Dict] = []
+    relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
+
+    try:
+        sql_content = file_path.read_text(encoding='utf-8')
+        # Handle potential multi-statement files (separated by ';')
+        # Use sqlglot.parse for better handling of dialects and complex cases
+        statements = sqlglot.parse(sql_content) # Returns a tuple/list of expressions
+    except Exception as e:
+        logger.error(f"Error reading or parsing file {file_path}: {e}")
+        return parsed_operations # Return empty list
+
+    if not statements:
+        logger.warning(f"No statements found in {file_path}")
+        return parsed_operations
+
+    for statement in statements:
+        if not statement: # Skip empty statements potentially generated by parse
+            continue
+
+        # Extract info if it's a relevant statement (CREATE TABLE / INSERT)
+        operation_info = extract_statement_info(statement, model_id, relative_path)
+
+        if operation_info:
+            # We might want to add more context here if needed later
+            # e.g., statement index within the file
+            parsed_operations.append(operation_info)
+
+    # Filter out models' duplicate statement (when exist both Create and Insert)
+    ids_with_insert = set()
+    for operation in parsed_operations:
+        statement = operation.get('main_statement')
+        model_id = operation.get('model_id')
+        if model_id and isinstance(statement, exp.Insert):
+            ids_with_insert.add(model_id)
+
+    # 2. Build the filtered list
+    filtered_operations = []
+    for operation in parsed_operations:
+        statement = operation.get('main_statement')
+        model_id = operation.get('model_id')
+
+        if not model_id or not statement:
+            # Optionally keep operations with missing data, or log/skip them
+            # logger.warning(f"Skipping operation due to missing model_id or statement: {operation}")
+            continue
+
+        # Check the type of the statement
+        is_create = isinstance(statement, exp.Create)
+        is_insert = isinstance(statement, exp.Insert)
+
+        # Apply the filtering rule:
+        # Keep the operation if:
+        # - It's an INSERT statement, OR
+        # - It's a CREATE statement AND its model_id does NOT have any associated INSERT statements.
+        if is_insert:
+            filtered_operations.append(operation)
+        elif is_create:
+            if model_id not in ids_with_insert:
+                filtered_operations.append(operation)
+
+
+    if not filtered_operations:
+        logger.warning(f"No relevant CREATE/INSERT operations found in {model_id} file: {file_path.name}")
+
+    return filtered_operations
+
+def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List[Dict]:
+    """
+    Parses each SQL file in the list, extracting all relevant operations.
     """
     processed_files = 0
     total_files = len(sql_files)
 
-    known_models: List[Dict] = []  # List of models defined by files
-    model_definitions: Dict[str, Dict[str, Any]] = {}  # model_id -> {file_path, schema, table_name}
-    # 1. Model Identification by Files
+    all_operations: List[Dict] = [] # List to store all parsed operations from all files
+    model_definitions: Dict[str, Dict[str, Any]] = {} # Still useful for duplicate checks by filename
+
     logger.info("--- Phase 2: SQL models parsing ---")
     for file_path in sql_files:
         processed_files += 1
+        # 1. Identify the "final" model this file represents based on path/name
         schema, table_name = extract_model_name_from_path(file_path, root_dir)
-        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Model: {schema}.{table_name})")
+        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Expected Model: {schema}.{table_name})")
+
         if schema and table_name:
             try:
+                # This ID represents the final output model of the file
                 model_id = format_node_id(TBL_PREFIX, schema, table_name)
+
+                # Check for duplicate file definitions for the same target model
                 if model_id in model_definitions:
                     logger.warning(
-                        f"Duplicate definition for model {model_id} found in {file_path.name} and {model_definitions[model_id]['file_path'].name}. "
-                        f"Using the latest one: {file_path.name}"
+                        f"Duplicate definition for model {model_id} found in {file_path.name} and "
+                        f"{model_definitions[model_id]['file_path'].name}. Using the latest: {file_path.name}"
                     )
-                # TODO: Model definitions is used only to verify duplicates. It is better to rewrite
-                model_definitions[model_id] = {"file_path": file_path, "orig_schema": schema,
-                                               "orig_table_name": table_name}
-                sql_model = parse_sql(model_id, root_dir, file_path, schema, table_name)
-                known_models.append(sql_model)
+                # Store minimal info for duplicate check
+                model_definitions[model_id] = {"file_path": file_path} # Removed orig names, not strictly needed here now
+
+                # 2. Parse the entire file to get all operations within it
+                file_operations = parse_sql_file(model_id, root_dir, file_path)
+
+                # 3. Add all operations found in this file to the main list
+                if file_operations:
+                    all_operations.extend(file_operations)
+                else:
+                     logger.warning(f"No operations extracted from {file_path.name} for model {model_id}")
+
 
             except ValueError as e:
                 logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
-        else:
-            logger.warning(f"Skipping file (failed to determine model): {file_path.name}")
+            except Exception as e:
+                 logger.error(f"Unexpected error processing file {file_path.name}: {e}", exc_info=True)
 
-    logger.info(f"Detected {len(known_models)} models with SQL definitions.")
-    return known_models
+        else:
+            logger.warning(f"Skipping file (failed to determine model name from path): {file_path.name}")
+
+    logger.info(f"Parsed {len(all_operations)} relevant CREATE/INSERT operations from {processed_files} files.")
+
+    return all_operations
 
 def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[str, str | None | Any]]]:
     """
@@ -512,7 +719,7 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
                 logger.debug(f"Detected CTEs: {ctes_in_scope} in {model.get('model_id')}")
 
         except Exception as e:
-            logger.error(f"Error while searching for source tables in {file_path.name} for {model_id}: {e}")
+            logger.error(f"Error while searching for source tables in {model.get('file_path').name} for {model.get('model_id')}: {e}")
 
         processed_upstream_models = set()
         target_schema_norm = normalize_name(model.get('schema'))
@@ -523,7 +730,7 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
             source_table_name_norm = normalize_name(source_table_name)
 
             # Schema from expression or target
-            source_schema = table_expr.db if table_expr.db else 'temporary_table'
+            source_schema = table_expr.db if table_expr.db else '_temp'
             source_schema_norm = normalize_name(source_schema)
 
             # Ignore self-reference
@@ -535,7 +742,7 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
                 upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
             except ValueError as e:
                 logger.error(
-                    f"ID formatting error for source table {source_schema}.{source_table_name} in {model_id}: {e}")
+                    f"ID formatting error for source table {source_schema}.{source_table_name} in {model.get('model_id')}: {e}")
                 continue
 
             if upstream_model_id in processed_upstream_models:
@@ -1042,6 +1249,7 @@ def main():
     else:
         logger.info(
             "Skipping Phase 1 as source models' file was not provided. Source models will be detected from SQL scripts")
+
 
     sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
     models = source_models + sql_models
