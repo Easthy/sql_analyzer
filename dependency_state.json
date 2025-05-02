@@ -63,38 +63,38 @@
     {
       "type": "tbl",
       "schema": "mwl",
-      "name": "users",
+      "name": "mysql_users",
       "source_type": "source_table",
       "file_path": null,
-      "id": "tbl:mwl.users"
+      "id": "tbl:mwl.mysql_users"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "users",
+      "table": "mysql_users",
       "column": "user_hash_key",
-      "id": "col:mwl.users.user_hash_key"
+      "id": "col:mwl.mysql_users.user_hash_key"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "users",
+      "table": "mysql_users",
       "column": "user_id",
-      "id": "col:mwl.users.user_id"
+      "id": "col:mwl.mysql_users.user_id"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "users",
+      "table": "mysql_users",
       "column": "projec_id",
-      "id": "col:mwl.users.projec_id"
+      "id": "col:mwl.mysql_users.projec_id"
     },
     {
       "type": "col",
       "schema": "mwl",
-      "table": "users",
+      "table": "mysql_users",
       "column": "fake",
-      "id": "col:mwl.users.fake"
+      "id": "col:mwl.mysql_users.fake"
     },
     {
       "type": "tbl",
@@ -117,6 +117,93 @@
       "table": "project",
       "column": "name",
       "id": "col:reference.project.name"
+    },
+    {
+      "type": "tbl",
+      "schema": "_temp",
+      "name": "user_last_activity_tmp",
+      "source_type": "model",
+      "file_path": "business_vault/business_vault.user_attributes.sql",
+      "id": "tbl:_temp.user_last_activity_tmp"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_last_activity_tmp",
+      "column": "user_hash_key",
+      "id": "col:_temp.user_last_activity_tmp.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_last_activity_tmp",
+      "column": "last_activity",
+      "id": "col:_temp.user_last_activity_tmp.last_activity"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_last_activity_tmp",
+      "column": "last_activity_apk",
+      "id": "col:_temp.user_last_activity_tmp.last_activity_apk"
+    },
+    {
+      "type": "tbl",
+      "schema": "_temp",
+      "name": "user_diff_tmp",
+      "source_type": "model",
+      "file_path": "business_vault/business_vault.user_attributes.sql",
+      "id": "tbl:_temp.user_diff_tmp"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_diff_tmp",
+      "column": "user_hash_key",
+      "id": "col:_temp.user_diff_tmp.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_diff_tmp",
+      "column": "last_activity",
+      "id": "col:_temp.user_diff_tmp.last_activity"
+    },
+    {
+      "type": "col",
+      "schema": "_temp",
+      "table": "user_diff_tmp",
+      "column": "last_activity_apk",
+      "id": "col:_temp.user_diff_tmp.last_activity_apk"
+    },
+    {
+      "type": "tbl",
+      "schema": "business_vault",
+      "name": "user_attributes",
+      "source_type": "model",
+      "file_path": "business_vault/business_vault.user_attributes.sql",
+      "id": "tbl:business_vault.user_attributes"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "user_attributes",
+      "column": "user_hash_key",
+      "id": "col:business_vault.user_attributes.user_hash_key"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "user_attributes",
+      "column": "calc_last_activity",
+      "id": "col:business_vault.user_attributes.calc_last_activity"
+    },
+    {
+      "type": "col",
+      "schema": "business_vault",
+      "table": "user_attributes",
+      "column": "calc_last_activity_apk",
+      "id": "col:business_vault.user_attributes.calc_last_activity_apk"
     },
     {
       "type": "tbl",
@@ -267,6 +354,14 @@
       "table": "user_daily_kpi",
       "column": "withdrawal_usd",
       "id": "col:public.user_daily_kpi.withdrawal_usd"
+    },
+    {
+      "type": "tbl",
+      "schema": "mwl",
+      "name": "event_tracker",
+      "source_type": "source_table",
+      "file_path": null,
+      "id": "tbl:mwl.event_tracker"
     }
   ],
   "links": [
@@ -307,23 +402,23 @@
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.users",
-      "target": "col:mwl.users.user_hash_key"
+      "source": "tbl:mwl.mysql_users",
+      "target": "col:mwl.mysql_users.user_hash_key"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.users",
-      "target": "col:mwl.users.user_id"
+      "source": "tbl:mwl.mysql_users",
+      "target": "col:mwl.mysql_users.user_id"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.users",
-      "target": "col:mwl.users.projec_id"
+      "source": "tbl:mwl.mysql_users",
+      "target": "col:mwl.mysql_users.projec_id"
     },
     {
       "type": "contains_column",
-      "source": "tbl:mwl.users",
-      "target": "col:mwl.users.fake"
+      "source": "tbl:mwl.mysql_users",
+      "target": "col:mwl.mysql_users.fake"
     },
     {
       "type": "contains_column",
@@ -337,13 +432,103 @@
     },
     {
       "type": "table_dependency",
+      "source": "tbl:_temp.user_last_activity_tmp",
+      "target": "tbl:mwl.event_tracker"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_last_activity_tmp",
+      "target": "col:_temp.user_last_activity_tmp.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_last_activity_tmp",
+      "target": "col:_temp.user_last_activity_tmp.last_activity"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_last_activity_tmp",
+      "target": "col:_temp.user_last_activity_tmp.last_activity_apk"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:_temp.user_diff_tmp",
+      "target": "tbl:mwl.mysql_users"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:_temp.user_diff_tmp",
+      "target": "tbl:_temp.user_last_activity_tmp"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_diff_tmp",
+      "target": "col:_temp.user_diff_tmp.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_diff_tmp",
+      "target": "col:_temp.user_diff_tmp.last_activity"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:_temp.user_diff_tmp",
+      "target": "col:_temp.user_diff_tmp.last_activity_apk"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:_temp.user_diff_tmp.last_activity",
+      "target": "col:_temp.user_last_activity_tmp.last_activity"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:_temp.user_diff_tmp.last_activity_apk",
+      "target": "col:_temp.user_last_activity_tmp.last_activity_apk"
+    },
+    {
+      "type": "table_dependency",
+      "source": "tbl:business_vault.user_attributes",
+      "target": "tbl:_temp.user_diff_tmp"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.user_attributes",
+      "target": "col:business_vault.user_attributes.user_hash_key"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.user_attributes",
+      "target": "col:business_vault.user_attributes.calc_last_activity"
+    },
+    {
+      "type": "contains_column",
+      "source": "tbl:business_vault.user_attributes",
+      "target": "col:business_vault.user_attributes.calc_last_activity_apk"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.user_attributes.user_hash_key",
+      "target": "col:_temp.user_diff_tmp.user_hash_key"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.user_attributes.calc_last_activity",
+      "target": "col:_temp.user_diff_tmp.last_activity"
+    },
+    {
+      "type": "column_dependency",
+      "source": "col:business_vault.user_attributes.calc_last_activity_apk",
+      "target": "col:_temp.user_diff_tmp.last_activity_apk"
+    },
+    {
+      "type": "table_dependency",
       "source": "tbl:business_vault.br_payment",
       "target": "tbl:mwl.mysql_payments"
     },
     {
       "type": "table_dependency",
       "source": "tbl:business_vault.br_payment",
-      "target": "tbl:mwl.users"
+      "target": "tbl:mwl.mysql_users"
     },
     {
       "type": "contains_column",
@@ -398,7 +583,7 @@
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.fake",
-      "target": "col:mwl.users.fake"
+      "target": "col:mwl.mysql_users.fake"
     },
     {
       "type": "column_dependency",
@@ -433,7 +618,7 @@
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysql_payments.sum_usd"
+      "target": "col:mwl.mysql_payments.user_hash_key"
     },
     {
       "type": "column_dependency",
@@ -443,7 +628,7 @@
     {
       "type": "column_dependency",
       "source": "col:business_vault.br_payment.in_out_usd",
-      "target": "col:mwl.mysql_payments.user_hash_key"
+      "target": "col:mwl.mysql_payments.sum_usd"
     },
     {
       "type": "column_dependency",

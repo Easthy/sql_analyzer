@@ -7,7 +7,7 @@ mwl.mysql_payments:
   - sum
   - sum_usd 
   - operation_id
-mwl.users:
+mwl.mysql_users:
   - user_hash_key
   - user_id
   - projec_id

@@ -9,7 +9,7 @@ CREATE TEMPORARY TABLE user_last_activity_tmp (
     last_activity          TIMESTAMP ENCODE AZ64,
     last_activity_apk      TIMESTAMP ENCODE AZ64
 )
-    DISTSTYLE KEY (user_hash_key)
+    DISTSTYLE KEY
     DISTKEY (user_hash_key)
     SORTKEY (last_activity)
 ;

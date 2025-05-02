@@ -17,10 +17,10 @@ COLUMN_NODE_SIZE = 300
 TABLE_EDGE_COLOR = 'black' # Make table dependencies more prominent
 COLUMN_EDGE_COLOR = 'gray'
 FONT_SIZE = 7
-COLUMN_OFFSET_RADIUS = 0.15
-FIGURE_SIZE = (20, 15)
-LAYOUT_K = 0.97
-LAYOUT_ITERATIONS = 170
+COLUMN_OFFSET_RADIUS = 0.35
+FIGURE_SIZE = (40, 30)
+LAYOUT_K = 1.1
+LAYOUT_ITERATIONS = 150 * 2
 TABLE_ARROW_SIZE = 15 # Slightly larger arrows for table dependencies
 COLUMN_ARROW_SIZE = 10
 # ---
@@ -49,9 +49,9 @@ for u, v, attrs in G.edges(data=True):
 print("Calculating table layout...")
 pos_tables = nx.spring_layout(
     G_tables_layout, # Use the layout graph
-    k=LAYOUT_K / math.sqrt(G_tables_layout.number_of_nodes()) if G_tables_layout.number_of_nodes() > 0 else LAYOUT_K,
+    k=LAYOUT_K / math.sqrt(G_tables_layout.number_of_nodes()) + 5 if G_tables_layout.number_of_nodes() > 0 else LAYOUT_K,
     iterations=LAYOUT_ITERATIONS,
-    seed=42
+    seed=50
 )
 print("Table layout calculated.")
 

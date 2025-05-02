@@ -37,10 +37,10 @@ SELECT mysql_payments.user_hash_key,
   FROM mwl.mysql_payments
 
        LEFT JOIN (
-              SELECT users.user_hash_key,
-                     users.fake
-                FROM mwl.users
-               WHERE users.project_id NOT IN (4, 5, 6)
+              SELECT mysql_users.user_hash_key,
+                     mysql_users.fake
+                FROM mwl.mysql_users
+               WHERE mysql_users.project_id NOT IN (4, 5, 6)
        ) AS users
  WHERE mysql_payments.closed_at >= CURRENT_DATE - 30
 ;
