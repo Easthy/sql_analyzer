@@ -912,7 +912,7 @@ def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.di
             for column, dependencies in model.get('column_dependency').items():
                 for dependency in dependencies:
                     try:
-                        # Добавляем ребро зависимости колонок: target_col -> source_col
+                        # Adds edge between dependent columns: target_col -> source_col
                         if graph.has_node(dependency.get('source_col_id')):
                             graph.add_edge(
                                 dependency.get('target_col_id'), dependency.get('source_col_id'),
@@ -1003,7 +1003,7 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
             search_node_id = format_node_id(
                 parsed_input_id['type'],
                 parsed_input_id.get('schema'),
-                parsed_input_id.get('table'),  # parse_node_id возвращает 'table'
+                parsed_input_id.get('table'),  # parse_node_id returns 'table'
                 parsed_input_id.get('column')
             )
             if changed_node_id != search_node_id:
@@ -1126,11 +1126,11 @@ def find_significant_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGra
         # Looking for targets (u) whose edges (u, v) were removed, but both nodes u and v still exist
         for u, v in removed_edges:
             if u in current_graph and v in current_graph:
-                if previous_graph.has_edge(u, v):  # Убедимся, что ребро действительно было
+                if previous_graph.has_edge(u, v):  # Verifying existence of the edge
                     edge_data = previous_graph.get_edge_data(u, v)
                     edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
                     logger.debug(f"The {edge_type} dependency of node {u} on {v} was removed (both nodes still exist).")
-                    directly_affected_targets.add(u)  # Узел 'u' затронут изменением
+                    directly_affected_targets.add(u)  # Node 'u' is touched by changes
 
         # Now find the full downstream impact for directly_affected_targets in the CURRENT graph
         if directly_affected_targets:
