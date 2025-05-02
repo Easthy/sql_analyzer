@@ -320,9 +320,6 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
     (i.e., leaf Column nodes in the lineage tree with table information).
     """
     processed_node_ids = set()
-
-    target_col_name = get_name_from_node_id(target_col_id).get('column')
-
     _cols = []
 
     def traverse(current_node: LineageNode):
@@ -336,7 +333,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
 
         if is_leaf_node:
             table_schema = str(current_node.source).split('.')[0] if '.' in str(current_node.source) else '_temp'
-            table_name = current_node.name.split('.')[0]
+            table_name = current_node.source.name  # current_node.name is an alias of a table
             column = current_node.name.split('.')[1]
 
             # If the leaf node is itself a column (and not the target)
@@ -670,7 +667,6 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List[Dict]:
                 else:
                      logger.warning(f"No operations extracted from {file_path.name} for model {model_id}")
 
-
             except ValueError as e:
                 logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
             except Exception as e:
@@ -682,6 +678,7 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List[Dict]:
     logger.info(f"Parsed {len(all_operations)} relevant CREATE/INSERT operations from {processed_files} files.")
 
     return all_operations
+
 
 def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[str, str | None | Any]]]:
     """
@@ -823,7 +820,7 @@ def get_column_dependency(model_id: str, target_col_id: str, main_statement: sql
                 'source_col_id': source_col_id
             })
             logger.debug(
-                f"Found column dependency: {target_col_id} -> {source_col_id}"
+                f"Found column dependency: (target) {target_col_id} -> {source_col_id} (source)"
             )
 
     return column_dependency
