@@ -334,7 +334,7 @@ def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col
         if is_leaf_node:
             table_schema = str(current_node.source).split('.')[0] if '.' in str(current_node.source) else '_temp'
             table_name = current_node.source.name  # current_node.name is an alias of a table
-            column = current_node.name.split('.')[1]
+            column = current_node.name.split('.')[1] if '.' in current_node.name else current_node.name
 
             # If the leaf node is itself a column (and not the target)
             source_col_id = format_node_id(
