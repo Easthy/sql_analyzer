@@ -303,7 +303,7 @@ def find_main_statement(sql_content: str, target_schema: str, target_table: str)
 
     if not main_statement:
         logger.warning(
-            f"No main INSERT/CREATE TABLE/VIEW statement found for... {target_schema}.{target_table} в файле.")
+            f"No main INSERT/CREATE TABLE/VIEW statement found for... {target_schema}.{target_table} in the file")
         # Optionally, try to find the *last* SELECT statement as a fallback? Risky.
         # last_select = next((e for e in reversed(expressions) if isinstance(e, exp.Select)), None)
         # if last_select:
@@ -534,10 +534,10 @@ def extract_statement_info(statement: exp.Expression, file_model_id: str, file_p
             original_len = len(target_columns)
             target_columns = [col for col in target_columns if isinstance(col, str)]
             if len(target_columns) != original_len:
-                 logger.warning(f"Some target columns were skipped (not strings) for {target_schema}.{target_table} in {file_path_str}")
+                logger.warning(f"Some target columns were skipped (not strings) for {target_schema}.{target_table} in {file_path_str}")
 
             target_schema = target_schema if target_schema else '_temp'
-            operation_info =  {
+            operation_info = {
                 "schema": target_schema,
                 "name": target_table,
                 "source_type": 'model',
@@ -546,10 +546,12 @@ def extract_statement_info(statement: exp.Expression, file_model_id: str, file_p
                 "main_statement": statement,
                 "model_id": format_node_id(TBL_PREFIX, target_schema, target_table)
             }
+            if target_table == 'br_payment':
+                pass
 
     except Exception as e:
         logger.error(f"Error processing statement in {file_path_str}: {statement.sql() if statement else 'N/A'}. Error: {e}", exc_info=True)
-        return None # Skip this statement on error
+        return None  # Skip this statement on error
 
     return operation_info
 
@@ -589,12 +591,15 @@ def parse_sql_file(model_id: str, root_dir: Path, file_path: Path) -> List[Dict]
             parsed_operations.append(operation_info)
 
     # Filter out models' duplicate statement (when exist both Create and Insert)
-    ids_with_insert = set()
+    ids_with_insert = {}
+    ids_with_create = {}
     for operation in parsed_operations:
         statement = operation.get('main_statement')
         model_id = operation.get('model_id')
         if model_id and isinstance(statement, exp.Insert):
-            ids_with_insert.add(model_id)
+            ids_with_insert[model_id] = operation
+        if model_id and isinstance(statement, exp.Create):
+            ids_with_create[model_id] = operation
 
     # 2. Build the filtered list
     filtered_operations = []
@@ -616,6 +621,10 @@ def parse_sql_file(model_id: str, root_dir: Path, file_path: Path) -> List[Dict]
         # - It's an INSERT statement, OR
         # - It's a CREATE statement AND its model_id does NOT have any associated INSERT statements.
         if is_insert:
+            # Renew columns name from CREATE statement as they are more correct than names derived from INSERT statement
+            if model_id in ids_with_create:
+                operation['columns'] = ids_with_create[model_id]['columns']
+
             filtered_operations.append(operation)
         elif is_create:
             if model_id not in ids_with_insert:
@@ -642,7 +651,7 @@ def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List[Dict]:
         processed_files += 1
         # 1. Identify the "final" model this file represents based on path/name
         schema, table_name = extract_model_name_from_path(file_path, root_dir)
-        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Expected Model: {schema}.{table_name})")
+        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Searching for the model: {schema}.{table_name})")
 
         if schema and table_name:
             try:
@@ -769,41 +778,44 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
     return models, source_models
 
 
-def get_column_dependency(model_id: str, target_col_id: str, main_statement: sqlglot.exp.Insert) -> List:
+def get_column_dependency(schema_name: str, model_name: str, target_col_name: str, target_to_source_column: Dict, main_statement: sqlglot.exp.Insert) -> List:
     """
     Searches for dependencies for the specified input column
+    target_col_name - Use the column name as the lineage target
+    main_statement - Full INSERT or CREATE AS SELECT statement
     """
     column_dependency = []
-    col_name = get_name_from_node_id(target_col_id).get('column')
     # --- Lineage Analysis ---
-    lineage_target_column = col_name  # Use the column name as the lineage target
-    lineage_sql_statement = main_statement  # Full INSERT or CREATE AS SELECT statement
-
     # Get the root node of the lineage tree for the target column
     lineage_result_node: Optional[LineageNode] = None
     try:
         lineage_result_node = sqlglot_lineage(
-            column=lineage_target_column,
-            sql=lineage_sql_statement,
-            dialect=getattr(config, "SQL_DIALECT", None),
-            # schema=... # Schema can be provided for better resolution
+            column=target_to_source_column.get(target_col_name), # Replace searched column's name by a name from INSERT/CREATE statement
+            sql=main_statement,
+            dialect=getattr(config, "SQL_DIALECT", None)
         )
     except NotImplementedError as nie:
         logger.warning(
-            f"Lineage is not implemented for the part of the expression related to column '{col_name}' in {model_id}. Error: {nie}"
+            f"Lineage is not implemented for the part of the expression related to column '{target_col_name}' in {model_name}. Error: {nie}"
         )
     except KeyError as ke:
         # Often occurs when sqlglot fails to resolve a column or table name
         logger.warning(
-            f"KeyError during lineage for column '{col_name}' in {model_id}: {ke}. The name might not have been resolved."
+            f"KeyError during lineage for column '{target_col_name}' in {model_name}: {ke}. The name might not have been resolved."
         )
     except Exception as e:
         logger.error(
-            f"Error while executing sqlglot.lineage for column '{col_name}' in {model_id}: {e}",
+            f"Error while executing sqlglot.lineage for column '{target_col_name}' in {model_name}: {e}",
             exc_info=False
         )
 
     if lineage_result_node:
+        target_col_id = format_node_id(
+            node_type=COL_PREFIX,
+            schema=schema_name,
+            name=model_name,
+            column=target_col_name
+        )
         # Searching for source columns in the lineage tree
         source_col_ids: List[
             sqlglot.exp.Column
@@ -839,8 +851,12 @@ def find_column_to_column_depencies(models: List) -> List:
 
         model['column_dependency'] = {}
         for column in model.get('columns'):
-            target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
-            model['column_dependency'][column] = get_column_dependency(model.get('model_id'), target_col_id,
+            # Target table's columns to colums from the last SELECT/CREATE statement
+            target_to_source_column = dict(zip(model.get('columns'), model.get('main_statement').named_selects))
+            model['column_dependency'][column] = get_column_dependency(model.get('schema'),
+                                                                       model.get('name'), 
+                                                                       column,
+                                                                       target_to_source_column,
                                                                        model.get('main_statement'))
 
     return models
@@ -1014,7 +1030,7 @@ def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[st
             search_node_id = changed_node_id  # Searching for "as is"
 
     if not graph.has_node(search_node_id):
-        logger.error(f"Узел '{search_node_id}' не найден в графе.")
+        logger.error(f"Node '{search_node_id}' was not found in the Graph")
         # Try to find without normalization, if it was applied
         if search_node_id != changed_node_id and graph.has_node(changed_node_id):
             logger.warning(f"Node '{search_node_id}' not found, but '{changed_node_id}' was found. Using it instead.")
@@ -1246,7 +1262,6 @@ def main():
     else:
         logger.info(
             "Skipping Phase 1 as source models' file was not provided. Source models will be detected from SQL scripts")
-
 
     sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
     models = source_models + sql_models
