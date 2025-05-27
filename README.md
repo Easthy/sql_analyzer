@@ -10,4 +10,3 @@ Existing solutions like dbt and sqlmesh impose certain limitations — while the
 
 #### Issues
 - There is a problem if the DISTKEY is defined right after a column's data type (sqlglot throws an error). It should be defined after all columns
-- Columns' names in the insert and select statements must be the same
