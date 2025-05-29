@@ -781,6 +781,10 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
 def get_column_dependency(schema_name: str, model_name: str, target_col_name: str, target_to_source_column: Dict, main_statement: sqlglot.exp.Insert) -> List:
     """
     Searches for dependencies for the specified input column
+    
+    schema_name – schema where the target column resides  
+    model_name – name of the table (or model) containing the target column
+    target_to_source_column - contains column names { COL_NAME_FROM_INSERT_OR_CREATE_STATEMENT: COL_NAME_FROM_SELECT_STATEMENT }
     target_col_name - Use the column name as the lineage target
     main_statement - Full INSERT or CREATE AS SELECT statement
     """
