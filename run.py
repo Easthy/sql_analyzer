@@ -569,7 +569,7 @@ def parse_sql_file(model_id: str, root_dir: Path, file_path: Path) -> List[Dict]
         sql_content = file_path.read_text(encoding='utf-8')
         # Handle potential multi-statement files (separated by ';')
         # Use sqlglot.parse for better handling of dialects and complex cases
-        statements = sqlglot.parse(sql_content) # Returns a tuple/list of expressions
+        statements = sqlglot.parse(sql=sql_content) # Returns a tuple/list of expressions
     except Exception as e:
         logger.error(f"Error reading or parsing file {file_path}: {e}")
         return parsed_operations # Return empty list
@@ -781,6 +781,7 @@ def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[st
 def get_column_dependency(schema_name: str, model_name: str, target_col_name: str, target_to_source_column: Dict, main_statement: sqlglot.exp.Insert) -> List:
     """
     Searches for dependencies for the specified input column
+    target_to_source_column - contains column names { COL_NAME_FROM_INSERT_OR_CREATE_STATEMENT: COL_NAME_FROM_SELECT_STATEMENT }
     target_col_name - Use the column name as the lineage target
     main_statement - Full INSERT or CREATE AS SELECT statement
     """
