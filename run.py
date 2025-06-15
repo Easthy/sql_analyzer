@@ -2,8 +2,9 @@
 import json
 import logging
 import warnings
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Set, Any, Optional
+from typing import List, Dict, Tuple, Optional, Set, Any
 
 import networkx as nx
 import sqlglot
@@ -18,1271 +19,670 @@ from sqlglot.lineage import lineage as sqlglot_lineage
 
 import config
 
-warnings.simplefilter(action='ignore', category=FutureWarning)  # Suppress pandas future warning from networkx/json
-
-# --- Checking for the presence of required attributes in config ---
-required_configs = ['SQL_MODELS_DIR', 'STATE_FILE', 'SQL_DIALECT', 'SQL_FILE_EXTENSION']
-missing_configs = [cfg for cfg in required_configs if not hasattr(config, cfg)]
-if missing_configs:
-    print(f"Error: The following required parameters are missing in config.py {', '.join(missing_configs)}")
-    exit(1)
-
-# --- Logging and Constants ---
-# Ensure directory for state file exists
-config.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=getattr(config, 'LOG_LEVEL', 'INFO'),
-    format=getattr(config, 'LOG_FORMAT', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
-    encoding='utf-8',
-    handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]  # Simplified handler
-)
-logger = logging.getLogger('sql_analyzer')  # Use a specific logger name
+# Disable warning that could happen during work with networkx and JSON
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 TBL_PREFIX = "tbl"
 COL_PREFIX = "col"
-# Default to True if NORMALIZE_NAMES not in config
-NORMALIZE_NAMES = getattr(config, 'NORMALIZE_NAMES', True)
 
-
-# --- Utilities for Names and IDs ---
-def normalize_name(name: Optional[str]) -> Optional[str]:
-    """Converts the name to lowercase if normalization is enabled"""
-    if NORMALIZE_NAMES and name:
-        return name.lower()
-    return name
-
-
-def format_node_id(node_type: str, schema: Optional[str], name: Optional[str], column: Optional[str] = None) -> str:
-    """Generates a unique ID for a graph node with optional normalization"""
-    schema_norm = normalize_name(schema if schema else 'unknown_schema')
-    name_norm = normalize_name(name if name else 'unknown_table')
-
-    if node_type == TBL_PREFIX:
-        if not schema_norm or not name_norm:
-            raise ValueError(f"Schema and name are required for table node: schema='{schema}', name='{name}'")
-        return f"{TBL_PREFIX}:{schema_norm}.{name_norm}"
-    elif node_type == COL_PREFIX:
-        if not schema_norm or not name_norm or not column:
-            raise ValueError(
-                f"Schema, table name, and column name are required for column node: schema='{schema}', name='{name}', column='{column}'")
-        col_norm = normalize_name(column)
-        return f"{COL_PREFIX}:{schema_norm}.{name_norm}.{col_norm}"
-    else:
-        raise ValueError(f"Unknown node type: {node_type}")
-
-
-def get_name_from_node_id(node_id: str) -> Dict:
+class ConfigManager:
     """
-    Extracts the table or column name from a node ID.
-
-    If the node represents a table (TBL_PREFIX), returns the table name.
-    If the node represents a column (COL_PREFIX), returns the column name.
+    Manages application configuration and sets up logging.
+    Ensures that all required configuration parameters are present.
     """
-    if node_id.startswith(f"{TBL_PREFIX}:"):
-        # Format: tbl:schema.table
-        try:
-            _, schema_table = node_id.split(":", 1)
-            schema, table = schema_table.split(".", 1)
-            return {"schema": schema, "table": table}
-        except ValueError:
-            raise ValueError(f"Invalid table node_id format: {node_id}")
-    elif node_id.startswith(f"{COL_PREFIX}:"):
-        # Format: col:schema.table.column
-        try:
-            _, schema_table_col = node_id.split(":", 1)
-            schema, table, column = schema_table_col.split(".", 2)
-            return {"schema": schema, "table": table, "column": column}
-        except ValueError:
-            raise ValueError(f"Invalid column node_id format: {node_id}")
-    else:
-        raise ValueError(f"Unknown node_id prefix: {node_id}")
+    def __init__(self):
+        self._validate_config()
+        self.sql_models_dir = config.SQL_MODELS_DIR
+        self.state_file = config.STATE_FILE
+        self.sql_dialect = getattr(config, 'SQL_DIALECT', None)
+        self.sql_file_extension = getattr(config, 'SQL_FILE_EXTENSION', '.sql')
+        self.normalize_names = getattr(config, 'NORMALIZE_NAMES', True)
+        self.source_models_file = getattr(config, 'SQL_SOURCE_MODELS', None)
+        
+        self.setup_logging()
 
+    def _validate_config(self):
+        """Checks for the presence of required attributes in the config module."""
+        required = ['SQL_MODELS_DIR', 'STATE_FILE', 'SQL_DIALECT', 'SQL_FILE_EXTENSION']
+        missing = [cfg for cfg in required if not hasattr(config, cfg)]
+        if missing:
+            raise ValueError(f"Error: Missing required parameters in config.py: {', '.join(missing)}")
 
-def parse_node_id(node_id: str) -> Dict[str, Optional[str]]:
-    """Parses the node ID into components"""
-    if not isinstance(node_id, str):
-        raise ValueError(f"Cannot parse node ID: Expected string, got {type(node_id)} ({node_id})")
-
-    parts = node_id.split(":", 1)
-    if len(parts) != 2:
-        raise ValueError(f"Cannot parse node ID: {node_id}. Invalid format (missing ':').")
-    node_type = parts[0]
-    full_name = parts[1]
-
-    name_parts = full_name.split('.')
-    if node_type == TBL_PREFIX:
-        if len(name_parts) < 2:
-            raise ValueError(f"Cannot parse table node ID: {node_id}. Expected format 'tbl:schema.table'")
-        schema = name_parts[0]
-        table = '.'.join(name_parts[1:])
-        return {"type": node_type, "schema": schema, "table": table, "column": None}
-    elif node_type == COL_PREFIX:
-        if len(name_parts) < 3:
-            raise ValueError(f"Cannot parse column node ID: {node_id}. Expected format 'col:schema.table.column'")
-        schema = name_parts[0]
-        table = name_parts[1]  # Assume second part is always the table for columns
-        column = '.'.join(name_parts[2:])
-        if not schema or not table or not column:
-            raise ValueError(f"Cannot parse column node ID: {node_id}. Invalid schema, table, or column part.")
-        return {"type": node_type, "schema": schema, "table": table, "column": column}
-    else:
-        raise ValueError(f"Cannot parse node ID: Unknown type '{node_type}' in {node_id}")
-
-
-# --- File and SQL handling functions ---
-def find_sql_files(directory: Path) -> List[Path]:
-    """Recursively finds all .sql files in the specified directory"""
-    logger.info(f"Searching for SQL files in: {directory}")
-    sql_files = list(directory.rglob(f"*{getattr(config, 'SQL_FILE_EXTENSION', '.sql')}"))
-    logger.info(f"Found {len(sql_files)} SQL files.")
-    if not sql_files:
-        logger.warning(
-            f"No files with extension {getattr(config, 'SQL_FILE_EXTENSION', '.sql')} found in the folder {directory}")
-    return sql_files
-
-
-def extract_model_name_from_path(file_path: Path, root_dir: Path) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extracts the model name (schema.table) from the file path.
-    Uses the file name in the format 'schema.table_name.sql
-    """
-    filename_stem = file_path.stem
-    name_parts = filename_stem.split('.')
-
-    if len(name_parts) < 2:
-        logger.warning(
-            f"Failed to get schema and table from the filename: '{file_path.name}'. "
-            f"Expected format: 'schema.table.sql'. File will be skipped"
+    def setup_logging(self):
+        """Configures the application's logger."""
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        log_level = getattr(config, 'LOG_LEVEL', 'INFO')
+        log_format = getattr(config, 'LOG_FORMAT', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        logging.basicConfig(
+            level=log_level,
+            format=log_format,
+            encoding='utf-8',
+            handlers=[RichHandler(rich_tracebacks=True, show_time=False, show_path=False)]
         )
-        return None, None
-
-    schema = name_parts[0]
-    table_name = '.'.join(name_parts[1:])
-
-    logger.debug(f"File: {file_path.name}, Schema: {schema}, Table: {table_name}")
-    return schema, table_name
+        logging.getLogger('sql_analyzer')
 
 
-def parse_source_models(source_file_list: Path) -> List:
-    """
-    Parses source models' definition from yaml file and return dict,
-    containing columns as well
-    """
+class NameUtils:
+    """A collection of static utility methods for handling node names and IDs."""
+    
+    _normalize_enabled = getattr(config, 'NORMALIZE_NAMES', True)
+    
+    @classmethod
+    def normalize_name(cls, name: Optional[str]) -> Optional[str]:
+        """Converts the name to lowercase if normalization is enabled."""
+        if cls._normalize_enabled and name:
+            return name.lower()
+        return name
 
-    def load_source_tables(source_file_list: Path) -> Dict:
-        """Load source table schemas from YAML file."""
-        try:
-            with open(source_file_list, 'r') as file:
-                source_tables = yaml.safe_load(file)
-            logger.info(f"Loaded source tables: {list(source_tables.keys())}")
-            return source_tables
-        except Exception as e:
-            logger.error(f"Failed to load sources file: {e}")
-            raise
+    @classmethod
+    def format_node_id(cls, node_type: str, schema: Optional[str], name: Optional[str], column: Optional[str] = None) -> str:
+        """Generates a unique ID for a graph node with optional normalization."""
+        schema_norm = cls.normalize_name(schema if schema else 'unknown_schema')
+        name_norm = cls.normalize_name(name if name else 'unknown_table')
 
-    logger.info("--- Phase 1: Source models parsing ---")
-    source_models = []
-    parsed_definitions = load_source_tables(source_file_list)
-
-    for table, columns in parsed_definitions.items():
-        schema, table_name = table.split('.')
-        model_id = format_node_id(TBL_PREFIX, schema, table_name)
-        source_models.append({
-            "schema": schema,
-            "name": table_name,
-            "source_type": 'source_table',
-            "columns": columns,
-            "model_id": format_node_id(TBL_PREFIX, schema, table_name)
-        })
-    return source_models
-
-
-def find_main_statement(sql_content: str, target_schema: str, target_table: str) -> Optional[Expression]:
-    """
-    Parses the SQL and finds the 'main' statement (INSERT or CREATE) that defines the target table
-    """
-    try:
-        expressions = sqlglot.parse(sql_content, read=getattr(config, 'SQL_DIALECT', None))
-    except ParseError as e:
-        logger.error(f"SQL parsing error for {target_schema}.{target_table}: {e}")
-        # Log detailed parsing errors
-        if hasattr(e, 'errors') and e.errors:
-            for error_info in e.errors:
-                start = error_info.get('start', 0)
-                end = error_info.get('end', len(sql_content))
-                line = error_info.get('line', '?')
-                col = error_info.get('col', '?')
-                context_start = max(0, start - 50)
-                context_end = min(len(sql_content), end + 50)
-                problem_sql = sql_content[context_start:context_end]
-                logger.error(f"  Error: {error_info.get('description')} (row ~{line}, column ~{col})")
-                logger.error(f"  Context: ...{problem_sql}...")
+        if node_type == TBL_PREFIX:
+            if not schema_norm or not name_norm:
+                raise ValueError(f"Schema and name are required for table node: schema='{schema}', name='{name}'")
+            return f"{TBL_PREFIX}:{schema_norm}.{name_norm}"
+        elif node_type == COL_PREFIX:
+            if not schema_norm or not name_norm or not column:
+                raise ValueError(f"Schema, table name, and column are required: schema='{schema}', name='{name}', column='{column}'")
+            col_norm = cls.normalize_name(column)
+            return f"{COL_PREFIX}:{schema_norm}.{name_norm}.{col_norm}"
         else:
-            logger.error("  Parsing error details are unavailable")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error while parsing SQL for {target_schema}.{target_table}: {e}")
-        logger.debug(f"SQL context (the beginning):\n{sql_content[:500]}...")
-        return None
-
-    if not expressions:
-        logger.warning(f"No SQL statements found in the file for {target_schema}.{target_table}")
-        return None
-
-    main_statement = None
-    target_schema_norm = normalize_name(target_schema)
-    target_table_norm = normalize_name(target_table)
-
-    # Iterate backwards to find the last relevant statement
-    for expr in reversed(expressions):
-        table_expr = None
-        schema_name = None
-        table_name = None
-
-        if isinstance(expr, sqlglot.exp.Insert):
-            # Extracts the target table/schema from various INSERT forms
-            insert_target = expr.this
-            if isinstance(insert_target, sqlglot.exp.Table):
-                table_expr = insert_target
-                table_name = table_expr.name
-                schema_name = table_expr.db
-            elif isinstance(insert_target, sqlglot.exp.Dot) and isinstance(insert_target.this,
-                                                                           sqlglot.exp.Identifier) and isinstance(
-                    insert_target.expression, sqlglot.exp.Identifier):
-                schema_name = insert_target.expression.name
-                table_name = insert_target.this.name
-            elif isinstance(insert_target,
-                            sqlglot.exp.Schema):  # Handles INSERT INTO schema.table (cols...) or INSERT INTO db.schema.table (cols...)
-                innermost_table = insert_target.find(sqlglot.exp.Table)
-                if innermost_table:
-                    table_name = innermost_table.name
-                    schema_name = innermost_table.db  # Schema specified directly on table?
-                if not schema_name and isinstance(insert_target.this, sqlglot.exp.Identifier):  # Schema name itself?
-                    schema_name = insert_target.this.name
-
-            if table_name:
-                table_name_norm = normalize_name(table_name)
-                schema_name_norm = normalize_name(schema_name if schema_name else target_schema)
-
-                if table_name_norm == target_table_norm and schema_name_norm == target_schema_norm:
-                    main_statement = expr
-                    logger.debug(f"Found INSERT statement for {target_schema}.{target_table}")
-                    break
-                else:
-                    logger.debug(
-                        f"Found INSERT in the table '{schema_name}.{table_name}', but does not match the target '{target_schema}.{target_table}'.")
-
-        elif isinstance(expr, (sqlglot.exp.Create)):
-            target_create_expr = expr.this
-            kind = expr.kind or "OBJECT"
-
-            if isinstance(target_create_expr, sqlglot.exp.Table):
-                table_name = target_create_expr.name
-                schema_name = target_create_expr.db
-            elif isinstance(target_create_expr, sqlglot.exp.Dot) and isinstance(target_create_expr.this,
-                                                                                sqlglot.exp.Identifier) and isinstance(
-                    target_create_expr.expression, sqlglot.exp.Identifier):
-                schema_name = target_create_expr.expression.name
-                table_name = target_create_expr.this.name
-            elif isinstance(target_create_expr, sqlglot.exp.Identifier):
-                table_name = target_create_expr.this
-                schema_name = None
-
-            if table_name:
-                table_name_norm = normalize_name(table_name)
-                schema_name_norm = normalize_name(schema_name if schema_name else target_schema)
-
-                if table_name_norm == target_table_norm and schema_name_norm == target_schema_norm:
-                    main_statement = expr
-                    logger.debug(f"Found CREATE {kind} statement for {target_schema}.{target_table}")
-                    break
-                else:
-                    logger.debug(
-                        f"Found CREATE {kind} for '{schema_name}.{table_name}', but does not match the target '{target_schema}.{target_table}'.")
-
-    if not main_statement:
-        logger.warning(
-            f"No main INSERT/CREATE TABLE/VIEW statement found for... {target_schema}.{target_table} in the file")
-        # Optionally, try to find the *last* SELECT statement as a fallback? Risky.
-        # last_select = next((e for e in reversed(expressions) if isinstance(e, exp.Select)), None)
-        # if last_select:
-        #    logger.warning("Using the last SELECT as the main statement")
-        #    main_statement = last_select
-
-    return main_statement
-
-
-def find_source_columns_from_lineage(node: LineageNode, dialect: str, target_col_id: str) -> List[sqlglot.exp.Column]:
-    """
-    Recursively traverses the lineage Node tree and collects all
-    sqlglot.exp.Column expressions that represent terminal sources
-    (i.e., leaf Column nodes in the lineage tree with table information).
-    """
-    processed_node_ids = set()
-    _cols = []
-
-    def traverse(current_node: LineageNode):
-        node_id = id(current_node)
-        if node_id in processed_node_ids:
-            return
-        processed_node_ids.add(node_id)
-
-        # Check if the current node is a leaf in the lineage tree
-        is_leaf_node = not current_node.downstream
-
-        if is_leaf_node:
-            table_schema = str(current_node.source).split('.')[0] if '.' in str(current_node.source) else '_temp'
-            table_name = current_node.source.name  # current_node.name is an alias of a table
-            column = current_node.name.split('.')[1] if '.' in current_node.name else current_node.name
-
-            # If the leaf node is itself a column (and not the target)
-            source_col_id = format_node_id(
-                node_type=COL_PREFIX,
-                schema=table_schema,
-                name=table_name,
-                column=column
-            )
-            logger.debug(f"Found {source_col_id} column as source for the {target_col_id}")
-            _cols.append(source_col_id)
-
-        # Recursively traverse child nodes (downstream dependencies)
-        # Sources can only appear at the leaf nodes of the lineage tree
-        for child_node in current_node.downstream:
-            traverse(child_node)
-
-    # Start traversal from the root node returned by lineage()
-    if node:
-        traverse(node)
-
-    # Log the discovered sources
-    if _cols:
-        logger.debug(f"Found source columns for the target '{target_col_id}': {_cols}")
-
-    return _cols
-
-
-def parse_sql(model_id, root_dir: Path, file_path, target_schema, target_table) -> Optional[Dict]:
-    """
-    Parses input model's SQL file
-    """
-    model = None
-    relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
-    try:
-        sql_content = file_path.read_text(encoding='utf-8')
-    except Exception as e:
-        logger.error(f"Error reading file {file_path}: {e}")
-        return model
-
-    # Find the main statement (INSERT/CREATE)
-    main_statement = find_main_statement(sql_content, target_schema, target_table)
-    if not main_statement:
-        logger.warning(f"Skipping {model_id}: main INSERT/CREATE statement not found.")
-        return model
-
-    target_columns: List[str] = []
-
-    try:
-        # The code for extracting target_columns and select_expressions
-        select_part = None
-        if isinstance(main_statement, sqlglot.exp.Insert):
-            if isinstance(main_statement.expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                select_part = main_statement.expression.find(sqlglot.exp.Select)
-            target_col_names_explicit = []
-            target_spec = main_statement.this
-            # Handle cases like INSERT INTO schema.table (col1, col2)
-            columns_in_target = None
-            if isinstance(target_spec, sqlglot.exp.Schema) and target_spec.expressions:
-                columns_in_target = target_spec.expressions
-            # Handle cases like INSERT INTO table (col1, col2)
-            elif isinstance(target_spec, sqlglot.exp.Tuple):  # Often used for column lists
-                columns_in_target = target_spec.expressions
-
-            if columns_in_target:
-                target_col_names_explicit = [col.name for col in columns_in_target if
-                                             isinstance(col, sqlglot.exp.Identifier)]
-
-            if target_col_names_explicit:
-                target_columns = target_col_names_explicit
-
-            elif select_part:
-                target_columns = [col.alias_or_name for col in select_part.expressions]
-
-        elif isinstance(main_statement, sqlglot.exp.Create):
-            query_expression = main_statement.expression
-            if isinstance(query_expression, (sqlglot.exp.Select, sqlglot.exp.Union)):
-                select_part = query_expression.find(sqlglot.exp.Select)
-
-            if select_part:
-                target_columns = [col.alias_or_name for col in select_part.expressions]
-
-        original_len = len(target_columns)
-        target_columns = [col for col in target_columns if isinstance(col, str)]
-        if len(target_columns) != original_len:
-            logger.warning(f"Some target columns are neither strings nor None and have been skipped in {model_id}")
-
-    except Exception as e:
-        logger.error(f"Error extracting target columns/expressions for {model_id} from {file_path.name}: {e}",
-                     exc_info=True)
-        target_columns = []
-
-    return {
-        "schema": target_schema,
-        "name": target_table,
-        "source_type": 'model',
-        "file_path": relative_path,
-        "columns": target_columns,
-        "main_statement": main_statement,
-        "model_id": model_id
-    }
-
-def extract_statement_info(statement: exp.Expression, file_model_id: str, file_path_str: str) -> Optional[Dict[str, Any]]:
-    """
-    Extracts table creation or insertion details from a single SQL statement.
-    Returns a dictionary describing the operation or None if not relevant.
-    """
-    operation_info = None
-    target_columns: List[str] = []
-    select_expression: Optional[exp.Expression] = None
-    target_table_expr: Optional[exp.Table] = None
-    target_schema: Optional[str] = None
-    target_table: Optional[str] = None
-    is_temporary: bool = False
-    operation_type: Optional[str] = None
-
-    try:
-        if isinstance(statement, exp.Create):
-            # Interested in CREATE TABLE statements
-            if statement.kind and statement.kind.upper() == 'TABLE':
-                operation_type = 'CREATE'
-                target_table_expr = statement.this.find(exp.Table)
-                if not target_table_expr:
-                    logger.warning(f"Could not find target table in CREATE statement: {statement.sql()}")
-                    return None
-
-                target_schema = target_table_expr.db # Schema name
-                target_table = target_table_expr.name # Table name
-                is_temporary = statement.args.get('temporary', False)
-
-                # Check for columns definition
-                # 1. From explicit column list: CREATE TABLE name (col1 type, ...)
-                schema_def = statement.this.find(exp.Schema)
-                if schema_def and schema_def.expressions: # Check if column definitions exist
-                    target_columns = [
-                        col.this.name for col in schema_def.expressions
-                        if isinstance(col, exp.ColumnDef) and isinstance(col.this, exp.Identifier)
-                    ]
-
-                # 2. From a SELECT statement: CREATE TABLE name AS SELECT ...
-                if isinstance(statement.expression, (exp.Select, exp.Union)):
-                    select_expression = statement.expression
-                    # Try to get columns from SELECT if not explicitly defined
-                    if not target_columns:
-                        select_part = select_expression.find(exp.Select)
-                        if select_part:
-                             target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name is not None]
-
-
-        elif isinstance(statement, exp.Insert):
-            operation_type = 'INSERT'
-            target_table_expr = statement.this.find(exp.Table)
-            if not target_table_expr:
-                logger.warning(f"Could not find target table in INSERT statement: {statement.sql()}")
-                return None
-
-            target_schema = target_table_expr.db
-            target_table = target_table_expr.name
-            # Assume table is temporary if its name matches a previously created temp table
-            # (This requires state tracking across statements, which is complex here.
-            # A simpler approach is to check the CREATE statement for the temporary flag)
-            # We will mark the operation based on the info available IN THIS statement.
-            # The caller might correlate it later if needed.
-
-            # Extract target columns if explicitly listed: INSERT INTO tbl (col1, col2) ...
-            columns_in_target = None
-            # target_spec might be exp.Schema (for qualified names like schema.tbl(col1))
-            # or exp.Tuple (for unqualified names like tbl(col1))
-            target_spec = statement.this
-            if isinstance(target_spec, exp.Schema) and target_spec.expressions:
-                 # Check if the expressions following the table are columns
-                 if all(isinstance(e, exp.Identifier) for e in target_spec.expressions):
-                     columns_in_target = target_spec.expressions
-            elif isinstance(target_spec, exp.Tuple): # Often used for column lists directly after table name
-                 columns_in_target = target_spec.expressions
-            # Check the 'alias' argument which sometimes holds the column list
-            elif 'alias' in statement.args and isinstance(statement.args['alias'], exp.Tuple):
-                 columns_in_target = statement.args['alias'].expressions
-
-            if columns_in_target:
-                target_columns = [
-                    col.name for col in columns_in_target if isinstance(col, exp.Identifier)
-                ]
-
-            # Extract the source SELECT/VALUES etc.
-            if isinstance(statement.expression, (exp.Select, exp.Union)):
-                select_expression = statement.expression
-                # If target columns weren't explicit, derive from SELECT
-                if not target_columns:
-                    select_part = select_expression.find(exp.Select)
-                    if select_part:
-                        target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name is not None]
-
-
-        # If we identified a relevant operation, build the dict
-        if operation_type and target_table:
-            # Clean up columns - ensure they are strings
-            original_len = len(target_columns)
-            target_columns = [col for col in target_columns if isinstance(col, str)]
-            if len(target_columns) != original_len:
-                logger.warning(f"Some target columns were skipped (not strings) for {target_schema}.{target_table} in {file_path_str}")
-
-            target_schema = target_schema if target_schema else '_temp'
-            operation_info = {
-                "schema": target_schema,
-                "name": target_table,
-                "source_type": 'model',
-                "file_path": file_path_str,
-                "columns": target_columns,
-                "main_statement": statement,
-                "model_id": format_node_id(TBL_PREFIX, target_schema, target_table)
-            }
-            if target_table == 'br_payment':
-                pass
-
-    except Exception as e:
-        logger.error(f"Error processing statement in {file_path_str}: {statement.sql() if statement else 'N/A'}. Error: {e}", exc_info=True)
-        return None  # Skip this statement on error
-
-    return operation_info
-
-def parse_sql_file(model_id: str, root_dir: Path, file_path: Path) -> List[Dict]:
-    """
-    Parses an entire SQL file, extracting info about CREATE/INSERT operations.
-
-    Returns:
-        A list of dictionaries, each describing a CREATE or INSERT operation found.
-    """
-    parsed_operations: List[Dict] = []
-    relative_path = str(file_path.relative_to(root_dir)) if root_dir in file_path.parents else str(file_path)
-
-    try:
-        sql_content = file_path.read_text(encoding='utf-8')
-        # Handle potential multi-statement files (separated by ';')
-        # Use sqlglot.parse for better handling of dialects and complex cases
-        statements = sqlglot.parse(sql=sql_content) # Returns a tuple/list of expressions
-    except Exception as e:
-        logger.error(f"Error reading or parsing file {file_path}: {e}")
-        return parsed_operations # Return empty list
-
-    if not statements:
-        logger.warning(f"No statements found in {file_path}")
-        return parsed_operations
-
-    for statement in statements:
-        if not statement: # Skip empty statements potentially generated by parse
-            continue
-
-        # Extract info if it's a relevant statement (CREATE TABLE / INSERT)
-        operation_info = extract_statement_info(statement, model_id, relative_path)
-
-        if operation_info:
-            # We might want to add more context here if needed later
-            # e.g., statement index within the file
-            parsed_operations.append(operation_info)
-
-    # Filter out models' duplicate statement (when exist both Create and Insert)
-    ids_with_insert = {}
-    ids_with_create = {}
-    for operation in parsed_operations:
-        statement = operation.get('main_statement')
-        model_id = operation.get('model_id')
-        if model_id and isinstance(statement, exp.Insert):
-            ids_with_insert[model_id] = operation
-        if model_id and isinstance(statement, exp.Create):
-            ids_with_create[model_id] = operation
-
-    # 2. Build the filtered list
-    filtered_operations = []
-    for operation in parsed_operations:
-        statement = operation.get('main_statement')
-        model_id = operation.get('model_id')
-
-        if not model_id or not statement:
-            # Optionally keep operations with missing data, or log/skip them
-            # logger.warning(f"Skipping operation due to missing model_id or statement: {operation}")
-            continue
-
-        # Check the type of the statement
-        is_create = isinstance(statement, exp.Create)
-        is_insert = isinstance(statement, exp.Insert)
-
-        # Apply the filtering rule:
-        # Keep the operation if:
-        # - It's an INSERT statement, OR
-        # - It's a CREATE statement AND its model_id does NOT have any associated INSERT statements.
-        if is_insert:
-            # Renew columns name from CREATE statement as they are more correct than names derived from INSERT statement
-            if model_id in ids_with_create:
-                operation['columns'] = ids_with_create[model_id]['columns']
-
-            filtered_operations.append(operation)
-        elif is_create:
-            if model_id not in ids_with_insert:
-                filtered_operations.append(operation)
-
-
-    if not filtered_operations:
-        logger.warning(f"No relevant CREATE/INSERT operations found in {model_id} file: {file_path.name}")
-
-    return filtered_operations
-
-def parse_sql_models(sql_files: List[Path], root_dir: Path) -> List[Dict]:
-    """
-    Parses each SQL file in the list, extracting all relevant operations.
-    """
-    processed_files = 0
-    total_files = len(sql_files)
-
-    all_operations: List[Dict] = [] # List to store all parsed operations from all files
-    model_definitions: Dict[str, Dict[str, Any]] = {} # Still useful for duplicate checks by filename
-
-    logger.info("--- Phase 2: SQL models parsing ---")
-    for file_path in sql_files:
-        processed_files += 1
-        # 1. Identify the "final" model this file represents based on path/name
-        schema, table_name = extract_model_name_from_path(file_path, root_dir)
-        logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (Searching for the model: {schema}.{table_name})")
-
-        if schema and table_name:
-            try:
-                # This ID represents the final output model of the file
-                model_id = format_node_id(TBL_PREFIX, schema, table_name)
-
-                # Check for duplicate file definitions for the same target model
-                if model_id in model_definitions:
-                    logger.warning(
-                        f"Duplicate definition for model {model_id} found in {file_path.name} and "
-                        f"{model_definitions[model_id]['file_path'].name}. Using the latest: {file_path.name}"
-                    )
-                # Store minimal info for duplicate check
-                model_definitions[model_id] = {"file_path": file_path} # Removed orig names, not strictly needed here now
-
-                # 2. Parse the entire file to get all operations within it
-                file_operations = parse_sql_file(model_id, root_dir, file_path)
-
-                # 3. Add all operations found in this file to the main list
+            raise ValueError(f"Unknown node type: {node_type}")
+
+    @classmethod
+    def parse_node_id(cls, node_id: str) -> Dict[str, Optional[str]]:
+        """Parses the node ID into its components."""
+        if not isinstance(node_id, str):
+            raise ValueError(f"Cannot parse node ID: Expected string, got {type(node_id)} ({node_id})")
+
+        parts = node_id.split(":", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Cannot parse node ID: {node_id}. Invalid format.")
+        
+        node_type, full_name = parts
+        name_parts = full_name.split('.')
+
+        if node_type == TBL_PREFIX:
+            if len(name_parts) < 2:
+                raise ValueError(f"Cannot parse table node ID: {node_id}. Expected 'tbl:schema.table'")
+            schema, table = name_parts[0], '.'.join(name_parts[1:])
+            return {"type": node_type, "schema": schema, "table": table, "column": None}
+        elif node_type == COL_PREFIX:
+            if len(name_parts) < 3:
+                raise ValueError(f"Cannot parse column node ID: {node_id}. Expected 'col:schema.table.column'")
+            schema, table, column = name_parts[0], name_parts[1], '.'.join(name_parts[2:])
+            return {"type": node_type, "schema": schema, "table": table, "column": column}
+        else:
+            raise ValueError(f"Cannot parse node ID: Unknown type '{node_type}' in {node_id}")
+
+
+class ModelParser(ABC):
+    """Abstract base class for model parsers."""
+    def __init__(self, cfg: ConfigManager):
+        self.config = cfg
+        self.logger = logging.getLogger('sql_analyzer.parser')
+    
+    @abstractmethod
+    def parse(self) -> List[Dict[str, Any]]:
+        """Parses models and returns a list of model definitions."""
+        pass
+
+class SourceModelParser(ModelParser):
+    """Parses source models defined in a YAML file."""
+    
+    def parse(self) -> List[Dict[str, Any]]:
+        """Parses the source YAML file and returns a list of source table models."""
+        self.logger.info("--- Phase 1: Parsing source models ---")
+        if not self.config.source_models_file or not self.config.source_models_file.is_file():
+            self.logger.info("Source models file not provided or not found. Skipping.")
+            return []
+
+        try:
+            with self.config.source_models_file.open('r') as file:
+                source_definitions = yaml.safe_load(file)
+            self.logger.info(f"Loaded source tables: {list(source_definitions.keys())}")
+        except Exception as e:
+            self.logger.error(f"Failed to load or parse sources file: {e}")
+            return []
+
+        source_models = []
+        for table, columns in source_definitions.items():
+            schema, table_name = table.split('.')
+            source_models.append({
+                "schema": schema,
+                "name": table_name,
+                "source_type": 'source_table',
+                "columns": columns or [],
+                "model_id": NameUtils.format_node_id(TBL_PREFIX, schema, table_name)
+            })
+        return source_models
+
+class SqlModelParser(ModelParser):
+    """Parses SQL files to extract model definitions and operations."""
+
+    def parse(self) -> List[Dict[str, Any]]:
+        """Finds and parses all SQL files in the configured directory."""
+        self.logger.info("--- Phase 2: Parsing SQL models ---")
+        sql_files = self._find_sql_files()
+        if not sql_files:
+            self.logger.warning("No SQL files found for analysis.")
+            return []
+
+        all_operations = []
+        processed_files = 0
+        total_files = len(sql_files)
+
+        for file_path in sql_files:
+            processed_files += 1
+            schema, table_name = self._extract_model_name_from_path(file_path)
+            self.logger.info(f"[{processed_files}/{total_files}] Analyzing: {file_path} (model: {schema}.{table_name})")
+
+            if schema and table_name:
+                model_id = NameUtils.format_node_id(TBL_PREFIX, schema, table_name)
+                file_operations = self._parse_sql_file(model_id, file_path)
                 if file_operations:
                     all_operations.extend(file_operations)
-                else:
-                     logger.warning(f"No operations extracted from {file_path.name} for model {model_id}")
+            else:
+                self.logger.warning(f"Skipping file (could not determine model name): {file_path.name}")
+        
+        self.logger.info(f"Parsed {len(all_operations)} relevant CREATE/INSERT operations from {processed_files} files.")
+        return all_operations
 
-            except ValueError as e:
-                logger.error(f"ID formatting error for file {file_path.name} ({schema}.{table_name}): {e}")
-            except Exception as e:
-                 logger.error(f"Unexpected error processing file {file_path.name}: {e}", exc_info=True)
-
-        else:
-            logger.warning(f"Skipping file (failed to determine model name from path): {file_path.name}")
-
-    logger.info(f"Parsed {len(all_operations)} relevant CREATE/INSERT operations from {processed_files} files.")
-
-    return all_operations
-
-
-def find_table_to_table_depencies(models: List) -> Tuple[List[str], List[Dict[str, str | None | Any]]]:
-    """
-    Searches for dependencies between models and adds a list of tables each model depends on. 
-    Also finds a list of models not described in the sources
-    """
-    logger.info("--- Phase 3: Searching for table to table dependencies ---")
-    source_model_ids = set()
-    source_models = []
-
-    for model in models:
-        if not model.get("source_type") == "model":
-            logger.debug(f"Skipping searching table to table dependency for: {model}")
-            continue
-        # Table-level dependencies
-        source_tables_in_query = []
+    def _find_sql_files(self) -> List[Path]:
+        """Recursively finds all SQL files in the directory."""
+        self.logger.info(f"Searching for SQL files in: {self.config.sql_models_dir}")
+        sql_files = list(self.config.sql_models_dir.rglob(f"*{self.config.sql_file_extension}"))
+        self.logger.info(f"Found {len(sql_files)} SQL files.")
+        return sql_files
+    
+    def _extract_model_name_from_path(self, file_path: Path) -> Tuple[Optional[str], Optional[str]]:
+        """Extracts schema.table from a filename like 'schema.table_name.sql'."""
+        filename_stem = file_path.stem
+        name_parts = filename_stem.split('.')
+        if len(name_parts) < 2:
+            self.logger.warning(f"Invalid filename format: '{file_path.name}'. Expected 'schema.table.sql'.")
+            return None, None
+        
+        schema, table_name = name_parts[0], '.'.join(name_parts[1:])
+        return schema, table_name
+    
+    def _parse_sql_file(self, model_id: str, file_path: Path) -> List[Dict]:
+        """Parses a single SQL file for all CREATE/INSERT operations."""
+        relative_path = str(file_path.relative_to(self.config.sql_models_dir))
         try:
-            main_statement = model.get("main_statement")
-            # Find all tables used, excluding CTEs defined within the main statement
-            all_tables = list(main_statement.find_all(sqlglot.exp.Table))
-            # Searching for CTE
-            ctes_in_scope = set()
-            with_scope = main_statement.find(sqlglot.exp.With)
-            if with_scope:
-                # Normalize CTE names for comparison
-                ctes_in_scope = {normalize_name(cte.alias_or_name) for cte in with_scope.expressions if
-                                 cte.alias_or_name}
+            sql_content = file_path.read_text(encoding='utf-8')
+            statements = sqlglot.parse(sql=sql_content, read=self.config.sql_dialect)
+        except Exception as e:
+            self.logger.error(f"Error reading or parsing file {file_path}: {e}")
+            return []
 
-            # Filter tables, keeping only those that are not CTEs
-            source_tables_in_query = [
-                tbl for tbl in all_tables
-                if normalize_name(tbl.name) not in ctes_in_scope
-            ]
-            if ctes_in_scope:
-                logger.debug(f"Detected CTEs: {ctes_in_scope} in {model.get('model_id')}")
+        if not statements:
+            return []
+
+        parsed_operations = [
+            op for stmt in statements if stmt and (op := self._extract_statement_info(stmt, model_id, relative_path))
+        ]
+        
+        return self._filter_duplicate_operations(parsed_operations)
+
+    def _filter_duplicate_operations(self, operations: List[Dict]) -> List[Dict]:
+        """Filters out CREATE statements if an INSERT for the same table exists."""
+        inserts = {op['model_id']: op for op in operations if isinstance(op['main_statement'], exp.Insert)}
+        creates = {op['model_id']: op for op in operations if isinstance(op['main_statement'], exp.Create)}
+
+        final_ops = []
+        for op in operations:
+            model_id = op['model_id']
+
+            if isinstance(op['main_statement'], exp.Insert):
+                if model_id in creates: # If a CREATE also exists, use its column definition
+                    op['columns'] = creates[model_id]['columns']
+                final_ops.append(op)
+            elif isinstance(op['main_statement'], exp.Create):
+                if model_id not in inserts: # Only add CREATE if no INSERT exists for this model
+                    final_ops.append(op)
+        
+        return final_ops
+
+    def _extract_statement_info(self, statement: Expression, file_model_id: str, file_path_str: str) -> Optional[Dict]:
+        """Extracts details from a single CREATE TABLE or INSERT statement."""
+        try:
+            target_schema, target_table, op_type = None, None, None
+            target_columns: List[str] = []
+
+            if isinstance(statement, exp.Create) and statement.kind and statement.kind.upper() == 'TABLE':
+                op_type = 'CREATE'
+                table_expr = statement.this.find(exp.Table)
+                if not table_expr: return None
+                target_schema, target_table = table_expr.db, table_expr.name
+                
+                # Columns from CREATE TABLE (...)
+                schema_def = statement.this.find(exp.Schema)
+                if schema_def and schema_def.expressions:
+                    target_columns = [col.this.name for col in schema_def.expressions if isinstance(col, exp.ColumnDef)]
+                
+                # Columns from CREATE TABLE AS SELECT ...
+                elif isinstance(statement.expression, (exp.Select, exp.Union)):
+                    select_part = statement.expression.find(exp.Select)
+                    if select_part:
+                        target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name]
+
+            elif isinstance(statement, exp.Insert):
+                op_type = 'INSERT'
+                table_expr = statement.this.find(exp.Table)
+                if not table_expr: return None
+                target_schema, target_table = table_expr.db, table_expr.name
+
+                # Extract target columns if explicitly listed: INSERT INTO tbl (col1, col2) ...
+                columns_in_target = None
+                
+                # Columns from INSERT INTO tbl (col1, col2)
+                cols_spec = statement.this
+
+                if isinstance(cols_spec, exp.Schema) and cols_spec.expressions:
+                     # Check if the expressions following the table are columns
+                     if all(isinstance(e, exp.Identifier) for e in cols_spec.expressions):
+                         columns_in_target = cols_spec.expressions
+                elif isinstance(cols_spec, exp.Tuple): # Often used for column lists directly after table name
+                     columns_in_target = cols_spec.expressions
+                # Check the 'alias' argument which sometimes holds the column list
+                elif 'alias' in statement.args and isinstance(statement.args['alias'], exp.Tuple):
+                     columns_in_target = statement.args['alias'].expressions
+
+                if columns_in_target:
+                    target_columns = [
+                        col.name for col in columns_in_target if isinstance(col, exp.Identifier)
+                    ]
+
+                # Columns from SELECT statement
+                elif isinstance(statement.expression, (exp.Select, exp.Union)):
+                    select_part = statement.expression.find(exp.Select)
+                    if select_part:
+                        target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name]
+
+            if op_type and target_table:
+                target_schema = target_schema or '_temp'
+                return {
+                    "schema": target_schema,
+                    "name": target_table,
+                    "source_type": 'model',
+                    "file_path": file_path_str,
+                    "columns": [col for col in target_columns if isinstance(col, str)],
+                    "main_statement": statement,
+                    "model_id": NameUtils.format_node_id(TBL_PREFIX, target_schema, target_table)
+                }
 
         except Exception as e:
-            logger.error(f"Error while searching for source tables in {model.get('file_path').name} for {model.get('model_id')}: {e}")
+            self.logger.error(f"Error processing statement in {file_path_str}: {e}", exc_info=True)
+        return None
 
-        processed_upstream_models = set()
-        target_schema_norm = normalize_name(model.get('schema'))
-        target_table_norm = normalize_name(model.get('name'))
+class DependencyAnalyzer:
+    """Analyzes table-to-table and column-to-column dependencies in parsed models."""
+    
+    def __init__(self, cfg: ConfigManager):
+        self.config = cfg
+        self.logger = logging.getLogger('sql_analyzer.analyzer')
 
-        for table_expr in source_tables_in_query:
-            source_table_name = table_expr.name
-            source_table_name_norm = normalize_name(source_table_name)
+    def analyze_dependencies(self, models: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """Runs all dependency analysis phases."""
+        models, new_sources = self.analyze_table_dependencies(models)
+        models = self.analyze_column_dependencies(models)
+        return models, new_sources
+        
+    def analyze_table_dependencies(self, models: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+        """Finds table-level dependencies for each model."""
+        self.logger.info("--- Phase 3: Analyzing table-to-table dependencies ---")
+        existing_model_ids = {m['model_id'] for m in models}
+        undiscovered_source_ids = set()
 
-            # Schema from expression or target
-            source_schema = table_expr.db if table_expr.db else '_temp'
-            source_schema_norm = normalize_name(source_schema)
-
-            # Ignore self-reference
-            if source_schema_norm == target_schema_norm and source_table_name_norm == target_table_norm:
+        for model in models:
+            if model.get("source_type") != "model":
                 continue
-
+            
+            model['table_dependency'] = []
+            main_statement = model.get("main_statement")
+            if not main_statement: continue
+                
             try:
-                # model_id depends on upstream_model_id
-                upstream_model_id = format_node_id(TBL_PREFIX, source_schema, source_table_name)
-            except ValueError as e:
-                logger.error(
-                    f"ID formatting error for source table {source_schema}.{source_table_name} in {model.get('model_id')}: {e}")
+                # Find all CTE to exclude then from the list of source tables
+                with_scope = main_statement.find(exp.With)
+                ctes = {cte.alias_or_name for cte in with_scope.expressions} if with_scope else set()
+                
+                source_tables = [
+                    tbl for tbl in main_statement.find_all(exp.Table)
+                    if NameUtils.normalize_name(tbl.name) not in {NameUtils.normalize_name(c) for c in ctes}
+                ]
+
+                processed_upstreams = set()
+                for table_expr in source_tables:
+                    source_schema = table_expr.db if table_expr.db else '_temp'
+                    source_table = table_expr.name
+
+                    # Ignore self-references
+                    if NameUtils.normalize_name(source_schema) == NameUtils.normalize_name(model['schema']) and \
+                       NameUtils.normalize_name(source_table) == NameUtils.normalize_name(model['name']):
+                        continue
+
+                    upstream_id = NameUtils.format_node_id(TBL_PREFIX, source_schema, source_table)
+                    if upstream_id in processed_upstreams:
+                        continue
+                    
+                    model['table_dependency'].append(upstream_id)
+                    processed_upstreams.add(upstream_id)
+
+                    if upstream_id not in existing_model_ids:
+                        undiscovered_source_ids.add(upstream_id)
+            except Exception as e:
+                 self.logger.error(f"Error finding table dependencies for {model['model_id']}: {e}", exc_info=True)
+        
+        new_source_models = []
+        if undiscovered_source_ids:
+            self.logger.info(f"Found {len(undiscovered_source_ids)} new source tables from queries.")
+            for model_id in undiscovered_source_ids:
+                parsed_id = NameUtils.parse_node_id(model_id)
+                new_source_models.append({
+                    "schema": parsed_id["schema"], "name": parsed_id["table"],
+                    "source_type": 'source_table', "model_id": model_id, "columns": []
+                })
+
+        return models, new_source_models
+
+    def analyze_column_dependencies(self, models: List[Dict]) -> List[Dict]:
+        """Finds column-level dependencies for each model."""
+        self.logger.info("--- Phase 4: Analyzing column-to-column dependencies ---")
+        for model in models:
+            if model.get("source_type") != "model" or not model.get('columns'):
                 continue
+            
+            model['column_dependency'] = {}
+            main_statement = model.get("main_statement")
+            if not main_statement: continue
 
-            if upstream_model_id in processed_upstream_models:
+            # Map target columns to their corresponding SELECT expressions
+            try:
+                target_to_source_map = dict(zip(model['columns'], main_statement.named_selects))
+            except Exception as e:
+                self.logger.warning(f"Could not map columns for {model['model_id']}: {e}")
                 continue
-            processed_upstream_models.add(upstream_model_id)
+            
+            for col_name in model['columns']:
+                select_col_name = target_to_source_map.get(col_name) # Replace searched column's name by a name from INSERT/CREATE statement
+                if not select_col_name: continue
 
-            # Detecting source models
-            if upstream_model_id not in [model.get('model_id') for model in models]:
-                source_model_ids.add(upstream_model_id)
+                target_col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], col_name)
+                try:
+                    lineage_node = sqlglot_lineage(
+                        column=select_col_name,
+                        sql=main_statement,
+                        dialect=self.config.sql_dialect
+                    )
+                    source_col_ids = self._find_source_cols_from_lineage_node(lineage_node)
+                    if source_col_ids:
+                         model['column_dependency'][col_name] = [
+                             {'target_col_id': target_col_id, 'source_col_id': src_id} for src_id in source_col_ids
+                         ]
+                except Exception as e:
+                    self.logger.warning(f"Could not analyze lineage for column '{col_name}' in {model['model_id']}: {e}")
+        return models
 
-            # Adding dependency edge (table depends on other table)
-            if not 'table_dependency' in model:
-                model['table_dependency'] = []
-            model['table_dependency'].append(upstream_model_id)
+    def _find_source_cols_from_lineage_node(self, node: Optional[LineageNode]) -> List[str]:
+        """
+        Recursively traverses the lineage tree to find leaf column nodes (the true sources).
+        This is the corrected version.
+        """
+        if not node:
+            return []
+        
+        source_cols = []
+        
+        def traverse(current_node: LineageNode, visited: set):
+            if id(current_node) in visited:
+                return
+            visited.add(id(current_node))
 
-    if len(source_model_ids) > 0:
-        for model_id in source_model_ids:
-            model = get_name_from_node_id(model_id)
-            source_models.append({
-                "schema": model.get("schema"),
-                "name": model.get("table"),
-                "source_type": 'source_table',
-                "model_id": model_id
-            })
-        logger.info(
-            f"Found {len(source_model_ids)} source model that have not been included into sources description file {config.SQL_SOURCE_MODELS}")
-    return models, source_models
+            # A leaf node has no further downstream dependencies, it's a source.
+            if not current_node.downstream:
+                # The source expression, usually a Table
+                source_expr = current_node.source
+                
+                # We only care about columns that come from actual tables
+                if isinstance(source_expr, exp.Table):
+                    table_name = source_expr.name  # current_node.name is an alias of a table
+                    schema_name = str(current_node.source).split('.')[0] if '.' in str(current_node.source) else '_temp'
+                    # The column name at the source. It might be qualified like 'table.col'.
+                    # Get the clean column name, e.g., 'col' from 'table.col'
+                    clean_col_name = current_node.name.split('.')[-1] if '.' in current_node.name else current_node.name
 
+                    source_id = NameUtils.format_node_id(
+                        node_type=COL_PREFIX,
+                        schema=schema_name, # Can be None, format_node_id will handle it
+                        name=table_name,
+                        column=clean_col_name
+                    )
+                    if source_id not in source_cols:
+                        source_cols.append(source_id)
 
-def get_column_dependency(schema_name: str, model_name: str, target_col_name: str, target_to_source_column: Dict, main_statement: sqlglot.exp.Insert) -> List:
-    """
-    Searches for dependencies for the specified input column
-    target_to_source_column - contains column names { COL_NAME_FROM_INSERT_OR_CREATE_STATEMENT: COL_NAME_FROM_SELECT_STATEMENT }
-    target_col_name - Use the column name as the lineage target
-    main_statement - Full INSERT or CREATE AS SELECT statement
-    """
-    column_dependency = []
-    # --- Lineage Analysis ---
-    # Get the root node of the lineage tree for the target column
-    lineage_result_node: Optional[LineageNode] = None
-    try:
-        lineage_result_node = sqlglot_lineage(
-            column=target_to_source_column.get(target_col_name), # Replace searched column's name by a name from INSERT/CREATE statement
-            sql=main_statement,
-            dialect=getattr(config, "SQL_DIALECT", None)
-        )
-    except NotImplementedError as nie:
-        logger.warning(
-            f"Lineage is not implemented for the part of the expression related to column '{target_col_name}' in {model_name}. Error: {nie}"
-        )
-    except KeyError as ke:
-        # Often occurs when sqlglot fails to resolve a column or table name
-        logger.warning(
-            f"KeyError during lineage for column '{target_col_name}' in {model_name}: {ke}. The name might not have been resolved."
-        )
-    except Exception as e:
-        logger.error(
-            f"Error while executing sqlglot.lineage for column '{target_col_name}' in {model_name}: {e}",
-            exc_info=False
-        )
+            # Recurse down the tree
+            for child in current_node.downstream:
+                traverse(child, visited)
 
-    if lineage_result_node:
-        target_col_id = format_node_id(
-            node_type=COL_PREFIX,
-            schema=schema_name,
-            name=model_name,
-            column=target_col_name
-        )
-        # Searching for source columns in the lineage tree
-        source_col_ids: List[
-            sqlglot.exp.Column
-        ] = find_source_columns_from_lineage(
-            lineage_result_node,
-            getattr(config, "SQL_DIALECT", None),
-            target_col_id  # ID of the target column for comparison
-        )
-
-        # Processing the found source columns
-        for source_col_id in source_col_ids:
-            column_dependency.append({
-                'target_col_id': target_col_id,
-                'source_col_id': source_col_id
-            })
-            logger.debug(
-                f"Found column dependency: (target) {target_col_id} -> {source_col_id} (source)"
-            )
-
-    return column_dependency
+        traverse(node, set())
+        return source_cols
 
 
-def find_column_to_column_depencies(models: List) -> List:
-    """
-    Searches for column dependencies on other columns and adds this information to each model
-    """
-    logger.info("--- Phase 4: Searching for column to column dependencies ---")
+class LineageGraph:
+    """Manages the NetworkX graph, including building, saving, and loading."""
+    
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.logger = logging.getLogger('sql_analyzer.graph')
 
-    for model in models:
-        if not model.get("source_type") == "model":
-            logger.debug(f"Skipping searching column to column dependency for: {model}")
-            continue
+    def build_from_models(self, models: List[Dict]):
+        """Builds the entire graph from a list of model definitions."""
+        self.logger.info("--- Phase 5: Building dependency graph ---")
+        self._draw_nodes(models)
+        self._draw_edges(models)
+        self.logger.info(f"Graph built. Nodes: {self.graph.number_of_nodes()}, Edges: {self.graph.number_of_edges()}.")
 
-        model['column_dependency'] = {}
-        for column in model.get('columns'):
-            # Target table's columns to colums from the last SELECT/CREATE statement
-            target_to_source_column = dict(zip(model.get('columns'), model.get('main_statement').named_selects))
-            model['column_dependency'][column] = get_column_dependency(model.get('schema'),
-                                                                       model.get('name'), 
-                                                                       column,
-                                                                       target_to_source_column,
-                                                                       model.get('main_statement'))
+    def _draw_nodes(self, models: List[Dict]):
+        """Adds table and column nodes to the graph."""
+        for model in models:
+            try:
+                self.graph.add_node(
+                    model['model_id'], type=TBL_PREFIX, schema=model['schema'], name=model['name'],
+                    source_type=model.get('source_type'), file_path=model.get('file_path')
+                )
+                for column in model.get('columns', []):
+                    col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], column)
+                    self.graph.add_node(
+                        col_id, type=COL_PREFIX, schema=model['schema'], table=model['name'], column=column
+                    )
+            except Exception as e:
+                self.logger.error(f"Error adding nodes for model {model.get('model_id')}: {e}")
 
-    return models
+    def _draw_edges(self, models: List[Dict]):
+        """Adds dependency edges to the graph."""
+        for model in models:
+            model_id = model['model_id']
+            # Table -> Column containment
+            for column in model.get('columns', []):
+                col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], column)
+                if self.graph.has_node(model_id) and self.graph.has_node(col_id):
+                    self.graph.add_edge(model_id, col_id, type='contains_column')
 
+            # Table -> Table dependency
+            for upstream_id in model.get('table_dependency', []):
+                if self.graph.has_node(model_id) and self.graph.has_node(upstream_id):
+                    self.graph.add_edge(model_id, upstream_id, type='table_dependency')
 
-def draw_nodes(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
-    """
-    Adds nodes on graph for tables and columns
-    """
-    logger.info("--- Phase 5: Draw nodes ---")
-    for model in models:
-        # Add a node for the current model (table)
+            # Column -> Column dependency
+            for deps in model.get('column_dependency', {}).values():
+                for dep in deps:
+                    target, source = dep['target_col_id'], dep['source_col_id']
+                    if self.graph.has_node(target) and self.graph.has_node(source):
+                        self.graph.add_edge(target, source, type='column_dependency')
+    
+    def save_state(self, state_file: Path):
+        """Saves the graph to a JSON file."""
+        self.logger.info(f"Saving graph state to {state_file}...")
         try:
-            node_attrs = {
-                "type": TBL_PREFIX,
-                "schema": model.get('schema'),
-                "name": model.get('name'),
-                "source_type": model.get('source_type'),
-                "file_path": model.get('file_path')
-            }
-            graph.add_node(model.get('model_id'), **node_attrs)
-            logger.debug(f"Model node added: {model.get('model_id')}")
-        except (ValueError, KeyError) as e:
-            logger.error(f"Error parsing or adding model node {model.get('model_id')}: {e}")
-            continue
+            graph_data = json_graph.node_link_data(self.graph)
+            with state_file.open('w', encoding='utf-8') as f:
+                json.dump(graph_data, f, indent=2, ensure_ascii=False)
+            self.logger.info("Graph state saved successfully.")
+        except Exception as e:
+            self.logger.error(f"Failed to save graph state: {e}", exc_info=True)
 
-        columns = model.get('columns', [])
-        if len(columns) > 0:
-            for column in columns:
-                target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
-                col_name_norm = normalize_name(column)
-
-                # Adding a target column node
-                col_attrs = {
-                    "type": COL_PREFIX,
-                    "schema": model.get('schema'),
-                    "table": model.get('name'),
-                    "column": col_name_norm
-                }
-                graph.add_node(target_col_id, **col_attrs)
-                logger.debug(f"Added colum node {col_name_norm} for {model.get('model_id')}.")
-    return graph
-
-
-def draw_edges(graph: nx.classes.digraph.DiGraph, models: List) -> nx.classes.digraph.DiGraph:
-    """
-    Adds edges on graph between table-table, table-columns, column-column
-    """
-    logger.info("--- Phase 6: Draw edges ---")
-    for model in models:
-        if 'table_dependency' in model:
-            # Adding dependency edge (table depends on other table)
-            for upstream_model_id in model.get('table_dependency'):
-                if graph.has_node(upstream_model_id):
-                    graph.add_edge(model.get('model_id'), upstream_model_id, type='table_dependency')
-                    logger.debug(f"Table <-> Table dependency added: {model.get('model_id')} -> {upstream_model_id}")
-
-        columns = model.get('columns', [])
-        if len(columns) > 0:
-            for column in columns:
-                target_col_id = format_node_id(COL_PREFIX, model.get('schema'), model.get('name'), column)
-                graph.add_edge(model.get('model_id'), target_col_id, type='contains_column')
-                logger.debug(
-                    f"Column <-> Table dependency added: {model.get('model_id')} -> {model.get('upstream_model_id')}")
-        else:
-            logger.debug(f"There are no columns for the model: {model.get('model_id')}")
-
-        if 'column_dependency' in model:
-            for column, dependencies in model.get('column_dependency').items():
-                for dependency in dependencies:
-                    try:
-                        # Adds edge between dependent columns: target_col -> source_col
-                        if graph.has_node(dependency.get('source_col_id')):
-                            graph.add_edge(
-                                dependency.get('target_col_id'), dependency.get('source_col_id'),
-                                type="column_dependency"
-                            )
-                            logger.debug(
-                                f"Column <-> Column dependency added: {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Failed to add edge {dependency.get('target_col_id')} -> {dependency.get('source_col_id')}: source node not found."
-                            )
-
-                    except (ValueError, KeyError) as e:
-                        logger.error(
-                            f"Error while adding edge for source column {model.get('schema')}.{model.get('name')}.{column}: {e}"
-                        )
-    return graph
-
-
-# --- Graph saving/loading and comparison functions ---
-def save_graph_state(graph: nx.DiGraph, state_file: Path):
-    """Saves the graph to a JSON file."""
-    logger.info(f"Saving graph state to {state_file}...")
-    try:
-        # Prepare graph data for JSON serialization
-        export_graph = graph.copy()  # Work on a copy
-        # Convert non-serializable types (like Path) in node/edge attributes
-        for node, data in export_graph.nodes(data=True):
-            if 'file_path' in data and isinstance(data['file_path'], Path):
-                data['file_path'] = str(data['file_path'])
-            # Sanitize other non-serializable types if necessary
-            for key, value in list(data.items()):
-                if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    logger.debug(f"Converting node attribute '{node}' [{key}]: {type(value)} -> str")
-                    data[key] = str(value)
-        for u, v, data in export_graph.edges(data=True):
-            for key, value in list(data.items()):
-                if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    logger.debug(f"Converting edge attribute '({u}, {v})' [{key}]: {type(value)} -> str")
-                    data[key] = str(value)
-
-        graph_data = json_graph.node_link_data(export_graph)
-        with state_file.open('w', encoding='utf-8') as f:
-            json.dump(graph_data, f, indent=2, ensure_ascii=False)
-        logger.info("Graph state saved successfully.")
-    except TypeError as te:
-        logger.error(f"Error serializing graph to JSON: {te}.", exc_info=True)
-    except Exception as e:
-        logger.error(f"Failed to save graph state: {e}", exc_info=True)
-
-
-def load_graph_state(state_file: Path) -> Optional[nx.DiGraph]:
-    """Loads a graph from a JSON file."""
-    state_file_path = Path(state_file)  # Verifying Path object
-    if not state_file_path.exists():
-        logger.info(f"State file {state_file_path} not found. No previous state available.")
-        return None
-    logger.info(f"Loading graph state from {state_file_path}...")
-    try:
-        with state_file_path.open('r', encoding='utf-8') as f:
-            data = json.load(f)
-        # Use multigraph=False since we don't expect parallel edges of the same type
-        graph = json_graph.node_link_graph(data, directed=True, multigraph=False)
-        logger.info(
-            f"Graph state loaded successfully. Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}")
-        return graph
-    except json.JSONDecodeError as jde:
-        logger.error(f"Failed to decode JSON from file {state_file_path}: {jde}")
-        return None
-    except Exception as e:
-        logger.error(f"Failed to load graph state from {state_file_path}: {e}", exc_info=True)
-        return None
-
-
-def find_affected_downstream(graph: nx.DiGraph, changed_node_id: str) -> Dict[str, Set[str]]:
-    """
-    Finds all downstream nodes (models and columns) that depend on the modified node.
-    Uses reverse graph traversal (from source to consumers).
-    """
-    affected: Dict[str, Set[str]] = {"tables": set(), "columns": set()}
-
-    # Normalize the ID for graph lookup if normalization is enabled
-    search_node_id = changed_node_id
-    if NORMALIZE_NAMES:
+    @classmethod
+    def load_state(cls, state_file: Path) -> Optional['LineageGraph']:
+        """Loads a graph from a JSON file."""
+        if not state_file.exists():
+            logging.getLogger('sql_analyzer.graph').info(f"State file {state_file} not found. No previous state.")
+            return None
+        
+        logging.getLogger('sql_analyzer.graph').info(f"Loading graph state from {state_file}...")
         try:
-            parsed_input_id = parse_node_id(changed_node_id)
-            search_node_id = format_node_id(
-                parsed_input_id['type'],
-                parsed_input_id.get('schema'),
-                parsed_input_id.get('table'),  # parse_node_id returns 'table'
-                parsed_input_id.get('column')
-            )
-            if changed_node_id != search_node_id:
-                logger.debug(f"Normalized ID for lookup: {search_node_id} (from {changed_node_id})")
-        except ValueError as e:
-            logger.warning(
-                f"Failed to normalize ID '{changed_node_id}' for lookup: {e}. Lookup will proceed using the original ID.")
-            search_node_id = changed_node_id  # Searching for "as is"
-
-    if not graph.has_node(search_node_id):
-        logger.error(f"Node '{search_node_id}' was not found in the Graph")
-        # Try to find without normalization, if it was applied
-        if search_node_id != changed_node_id and graph.has_node(changed_node_id):
-            logger.warning(f"Node '{search_node_id}' not found, but '{changed_node_id}' was found. Using it instead.")
-            search_node_id = changed_node_id
-        else:
-            return affected
-
-    # nx.ancestors(graph, node) finds all nodes X such that there is a path X -> ... -> node.
-    # Since our edges go from target -> source, ancestors(graph, source_node) will return all target_nodes.
-    downstream_dependents = nx.ancestors(graph, search_node_id)
-
-    logger.info(f"Searching for nodes dependent on {search_node_id}...")
-    for node_id in downstream_dependents:
-        try:
-            node_data = graph.nodes[node_id]
-            node_type = node_data.get("type")
-            if node_type == TBL_PREFIX:
-                affected["tables"].add(node_id)
-            elif node_type == COL_PREFIX:
-                affected["columns"].add(node_id)
-        except KeyError:
-            logger.warning(f"No data found for node {node_id} while searching for dependents.")
-
-    # Add the modified node itself and its immediate components
-    try:
-        parsed_search_id = parse_node_id(search_node_id)
-        if parsed_search_id['type'] == COL_PREFIX:
-            affected["columns"].add(search_node_id)
-            # Also add the table to which the modified column belongs
-            table_id = format_node_id(TBL_PREFIX, parsed_search_id['schema'], parsed_search_id['table'])
-            if graph.has_node(table_id):
-                affected["tables"].add(table_id)
-        elif parsed_search_id['type'] == TBL_PREFIX:
-            affected["tables"].add(search_node_id)
-            # If the table has changed, all its columns (in the current graph) are also affected
-            # We search via predecessors, since the edges go from table -> column
-            for predecessor_id in graph.predecessors(search_node_id):
-                edge_data = graph.get_edge_data(predecessor_id, search_node_id)
-                # Edges go from table to column via contains_column(table_id, col_id)
-                # So we should be using successors(table_id)
-            for successor_id in graph.successors(search_node_id):
-                edge_data = graph.get_edge_data(search_node_id, successor_id)
-                if edge_data and edge_data.get("type") == 'contains_column':
-                    if graph.nodes[successor_id].get("type") == COL_PREFIX:
-                        affected["columns"].add(successor_id)
-
-    except (ValueError, KeyError) as e:
-        logger.warning(f"Error while auto-adding/adding components of node {search_node_id} to affected: {e}")
-
-    logger.info(
-        f"Found {len(affected['tables'])} dependent tables and {len(affected['columns'])} dependent columns for '{search_node_id}'.")
-    return affected
+            with state_file.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            instance = cls()
+            instance.graph = json_graph.node_link_graph(data, directed=True, multigraph=False)
+            logging.getLogger('sql_analyzer.graph').info(f"Graph state loaded. Nodes: {instance.graph.number_of_nodes()}, Edges: {instance.graph.number_of_edges()}.")
+            return instance
+        except Exception as e:
+            logging.getLogger('sql_analyzer.graph').error(f"Failed to load graph state: {e}", exc_info=True)
+            return None
 
 
-def find_significant_changes(previous_graph: nx.DiGraph, current_graph: nx.DiGraph):
-    """
-    Comparing states and analyzing the impact of deletions/changes
-    """
-    if previous_graph:
-        logger.info("-" * 30)
-        logger.info("Comparing with the previous state:")
+class ChangeDetector:
+    """Compares two LineageGraph instances and reports significant changes."""
 
-        current_nodes = set(current_graph.nodes)
-        previous_nodes = set(previous_graph.nodes)
-        added_nodes = current_nodes - previous_nodes
-        removed_nodes = previous_nodes - current_nodes
+    def __init__(self, old_graph: Optional[LineageGraph], new_graph: LineageGraph):
+        self.old_graph = old_graph.graph if old_graph else nx.DiGraph()
+        self.new_graph = new_graph.graph
+        self.logger = logging.getLogger('sql_analyzer.detector')
 
-        current_edges = set(current_graph.edges)
-        previous_edges = set(previous_graph.edges)
-        added_edges = current_edges - previous_edges
-        removed_edges = previous_edges - current_edges
+    def report_changes(self):
+        """Finds and logs additions, removals, and their impact."""
+        if not list(self.old_graph.nodes):
+            self.logger.info("Previous state not found — skipping comparison.")
+            return
+            
+        self.logger.info("-" * 30)
+        self.logger.info("Comparing with previous state:")
 
-        # --- Basic change report ---
-        has_changes = added_nodes or removed_nodes or added_edges or removed_edges
-        if has_changes:
-            if added_nodes:
-                logger.info(f"Added nodes ({len(added_nodes)}): {sorted(list(added_nodes))}")
-            if removed_nodes:
-                logger.info(f"Deleted Nodes ({len(removed_nodes)}): {sorted(list(removed_nodes))}")
-            if added_edges:
-                logger.info(f"Added dependencies ({len(added_edges)}): {sorted([(u, v) for u, v in added_edges])}")
-            if removed_edges:
-                logger.info(
-                    f"Removed dependencies ({len(removed_edges)}): {sorted([(u, v) for u, v in removed_edges])}")
-        else:
-            logger.info("No structural changes (nodes, edges) detected.")
-            save_graph_state(current_graph, config.STATE_FILE)
-            logger.info("Dependency analysis completed.")
+        old_nodes, new_nodes = set(self.old_graph.nodes), set(self.new_graph.nodes)
+        added_nodes = new_nodes - old_nodes
+        removed_nodes = old_nodes - new_nodes
+
+        old_edges, new_edges = set(self.old_graph.edges), set(self.new_graph.edges)
+        added_edges = new_edges - old_edges
+        removed_edges = old_edges - new_edges
+
+        if not any([added_nodes, removed_nodes, added_edges, removed_edges]):
+            self.logger.info("No structural changes detected.")
             return
 
-        # --- Analysis of the impact of removed elements ---
-        impacted_by_removal_tables = set()
-        impacted_by_removal_columns = set()
-        directly_affected_targets = set()  # Nodes in the CURRENT graph whose dependencies have DISAPPEARED
+        if added_nodes: self.logger.info(f"Added nodes ({len(added_nodes)}): {sorted(list(added_nodes))}")
+        if removed_nodes: self.logger.info(f"Deleted nodes ({len(removed_nodes)}): {sorted(list(removed_nodes))}")
+        if added_edges: self.logger.info(f"Added dependencies ({len(added_edges)}): {sorted([f'{u} -> {v}' for u, v in added_edges])}")
+        if removed_edges: self.logger.info(f"Removed dependencies ({len(removed_edges)}): {sorted([f'{u} -> {v}' for u, v in removed_edges])}")
 
-        # Looking for targets (predecessors) in the previous_graph that pointed to removed nodes
-        for removed_node_id in removed_nodes:
-            if removed_node_id in previous_graph:
-                # Looking for nodes that *previously* depended on a removed node
-                for predecessor_id in previous_graph.predecessors(removed_node_id):
-                    # If this dependent node still exists
-                    if predecessor_id in current_graph:
-                        edge_data = previous_graph.get_edge_data(predecessor_id, removed_node_id)
-                        edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
-                        logger.debug(
-                            f"Node {predecessor_id} (exists) previously depended on the removed node {removed_node_id} via {edge_type}.")
-                        directly_affected_targets.add(predecessor_id)
+        self._analyze_impact(removed_nodes, removed_edges)
+        self.logger.info("-" * 30)
 
-        # Looking for targets (u) whose edges (u, v) were removed, but both nodes u and v still exist
+    def _analyze_impact(self, removed_nodes: Set[str], removed_edges: Set[Tuple[str, str]]):
+        """Analyzes the downstream impact of removed nodes and edges."""
+        
+        # Find nodes in the new graph that were affected by removals
+        directly_affected = set()
         for u, v in removed_edges:
-            if u in current_graph and v in current_graph:
-                if previous_graph.has_edge(u, v):  # Verifying existence of the edge
-                    edge_data = previous_graph.get_edge_data(u, v)
-                    edge_type = edge_data.get('type', 'unknown') if edge_data else 'unknown'
-                    logger.debug(f"The {edge_type} dependency of node {u} on {v} was removed (both nodes still exist).")
-                    directly_affected_targets.add(u)  # Node 'u' is touched by changes
+            if u in self.new_graph and v in self.new_graph:
+                directly_affected.add(u) # A dependency was removed
+        
+        for node in removed_nodes:
+            # Find nodes that USED to depend on the removed node
+            if node in self.old_graph:
+                for predecessor in self.old_graph.predecessors(node):
+                    if predecessor in self.new_graph:
+                        directly_affected.add(predecessor)
 
-        # Now find the full downstream impact for directly_affected_targets in the CURRENT graph
-        if directly_affected_targets:
-            logger.info("-- Analyzing the impact of removed/modified dependencies ---")
-            final_impacted_nodes = set()  # Collect ALL affected nodes (directly and indirectly)
+        if not directly_affected:
+            self.logger.info("Removed elements did not affect any existing models.")
+            return
 
-            for target_id in directly_affected_targets:
-                # Add the node whose dependency has changed
-                final_impacted_nodes.add(target_id)
+        self.logger.info("--- Analyzing impact of removed/modified dependencies ---")
+        all_impacted_nodes = set()
+        for node_id in directly_affected:
+            all_impacted_nodes.add(node_id)
+            # Find all nodes that depend on the directly affected node
+            # In our graph, ancestors are consumers (dependents)
+            if node_id in self.new_graph:
+                downstream_dependents = nx.ancestors(self.new_graph, node_id)
+                all_impacted_nodes.update(downstream_dependents)
 
-                # Find all nodes that depend on this changed node in the CURRENT graph
-                # Use nx.ancestors because edges go from target -> source
-                try:
-                    if current_graph.has_node(target_id):
-                        downstream_dependents = nx.ancestors(current_graph, target_id)
-                        logger.debug(f"Searching downstream from {target_id}: {downstream_dependents}")
-                        final_impacted_nodes.update(downstream_dependents)
-                    else:
-                        # This shouldn't happen according to the logic above, but just in case
-                        logger.warning(
-                            f"Node {target_id}, marked as directly affected, is missing from the current graph during downstream search.")
-
-                except nx.NetworkXError as ne:
-                    logger.error(f"Error while searching for dependents of {target_id} in the current graph: {ne}")
-
-            # Categorizing affected nodes
-            for node_id in final_impacted_nodes:
-                # Retrieve data from the current graph if the node exists
-                if node_id in current_graph:
-                    try:
-                        node_data = current_graph.nodes[node_id]
-                        node_type = node_data.get("type")
-                        if node_type == TBL_PREFIX:
-                            impacted_by_removal_tables.add(node_id)
-                        elif node_type == COL_PREFIX:
-                            impacted_by_removal_columns.add(node_id)
-                    except KeyError:
-                        logger.warning(f"No data found for existing node {node_id} in the current graph.")
-                else:
-                    # If the node was affected but is now deleted (e.g., target_id was removed via cascade)
-                    # Try to retrieve data from the previous graph
-                    if node_id in previous_graph:
-                        try:
-                            node_data = previous_graph.nodes[node_id]
-                            node_type = node_data.get("type")
-                            if node_type == TBL_PREFIX:
-                                impacted_by_removal_tables.add(f"{node_id} (was removed)")
-                            elif node_type == COL_PREFIX:
-                                impacted_by_removal_columns.add(f"{node_id} (was removed)")
-                        except KeyError:
-                            logger.warning(f"No data found for deleted node {node_id} in the previous graph.")
-                    else:
-                        # A very unusual case
-                        logger.warning(
-                            f"Affected node {node_id} was not found in either the current or the previous graph.")
-
-            if impacted_by_removal_tables or impacted_by_removal_columns:
-                logger.info("Detected impact on the following objects due to removed/modified dependencies:")
-                if impacted_by_removal_tables:
-                    logger.info(
-                        f"  Impacted tables ({len(impacted_by_removal_tables)}): {sorted(list(impacted_by_removal_tables))}")
-                if impacted_by_removal_columns:
-                    logger.info(
-                        f"  Impacted columns ({len(impacted_by_removal_columns)}): {sorted(list(impacted_by_removal_columns))}")
-            else:
-                logger.info(
-                    "Directly affected targets were identified, but no remaining objects were impacted (only removed nodes were affected).")
-                if directly_affected_targets:
-                    logger.info("Dependency changes affected only removed objects.")
-                else:  # This branch should not be reached: has_changes=True, but directly_affected_targets is empt
-                    logger.info(
-                        "Removed or modified nodes/edges did not break any known dependencies of existing objects.")
-
-        logger.info("-" * 30)
-
-    else:
-        logger.info("Previous state not found — skipping comparison and impact analysis.")
+        impacted_tables = {n for n in all_impacted_nodes if self.new_graph.nodes[n].get('type') == TBL_PREFIX}
+        impacted_columns = {n for n in all_impacted_nodes if self.new_graph.nodes[n].get('type') == COL_PREFIX}
+        
+        if impacted_tables: self.logger.info(f"  Impacted tables ({len(impacted_tables)}): {sorted(list(impacted_tables))}")
+        if impacted_columns: self.logger.info(f"  Impacted columns ({len(impacted_columns)}): {sorted(list(impacted_columns))}")
 
 
-def main():
-    logger.info("=" * 50)
-    logger.info("Starting SQL model dependency analyzer...")
-    logger.info(f"Using models directory: {config.SQL_MODELS_DIR}")
-    logger.info(f"State file: {config.STATE_FILE}")
-    logger.info(f"Name normalization: {NORMALIZE_NAMES}")
-    logger.info(f"SQL dialect: {getattr(config, 'SQL_DIALECT', 'Not specified')}")
-    logger.info("=" * 50)
+class SQLAnalyzer:
+    """Orchestrates the entire SQL dependency analysis process."""
+    
+    def __init__(self):
+        self.config = ConfigManager()
+        self.logger = logging.getLogger('sql_analyzer')
+        # Dependency Injection: The analyzer uses components but doesn't create them.
+        self.source_parser = SourceModelParser(self.config)
+        self.sql_parser = SqlModelParser(self.config)
+        self.dependency_analyzer = DependencyAnalyzer(self.config)
 
-    if not config.SQL_MODELS_DIR.is_dir():
-        logger.error(f"SQL models directory not found: {config.SQL_MODELS_DIR}")
-        logger.error("Please check the path in config.py and make sure the directory exists.")
-        return
+    def run(self):
+        """Executes the full analysis pipeline."""
+        self.logger.info("=" * 50)
+        self.logger.info("Starting SQL model dependency analyzer...")
+        self.logger.info(f"Models directory: {self.config.sql_models_dir}")
+        self.logger.info(f"State file: {self.config.state_file}")
+        self.logger.info(f"SQL dialect: {self.config.sql_dialect}")
+        self.logger.info("=" * 50)
 
-    sql_files = find_sql_files(config.SQL_MODELS_DIR)
-    if not sql_files:
-        logger.warning("No SQL files found for analysis.")
-        if not Path(config.STATE_FILE).exists():
-            logger.info("Creating an empty state file.")
-            save_graph_state(nx.DiGraph(), Path(config.STATE_FILE))
-        logger.info("Shutting down.")
-        return
+        # 1. Load previous state
+        old_graph = LineageGraph.load_state(self.config.state_file)
 
-    # 1. Loading previous state
-    previous_graph = load_graph_state(config.STATE_FILE)
+        # 2. Parse all models from all sources
+        source_models = self.source_parser.parse()
+        sql_models = self.sql_parser.parse()
+        models = source_models + sql_models
 
-    # 2. Building current state
-    models = []
-    source_models = []
-    sql_models = []
+        # 3. Analyze dependencies
+        models, new_source_models = self.dependency_analyzer.analyze_table_dependencies(models)
+        all_models = models + new_source_models
+        all_models = self.dependency_analyzer.analyze_column_dependencies(all_models)
+        
+        # 4. Build the new graph
+        current_graph = LineageGraph()
+        current_graph.build_from_models(all_models)
 
-    if config.SQL_SOURCE_MODELS.is_file():
-        source_models = parse_source_models(config.SQL_SOURCE_MODELS)
-    else:
-        logger.info(
-            "Skipping Phase 1 as source models' file was not provided. Source models will be detected from SQL scripts")
+        # 5. Compare and report changes
+        change_detector = ChangeDetector(old_graph, current_graph)
+        change_detector.report_changes()
 
-    sql_models = parse_sql_models(sql_files, config.SQL_MODELS_DIR)
-    models = source_models + sql_models
+        # 6. Save the new state
+        current_graph.save_state(self.config.state_file)
 
-    models, source_models = find_table_to_table_depencies(models)
-    models = models + source_models
-    models = find_column_to_column_depencies(models)
-
-    current_graph = nx.DiGraph()
-    current_graph = draw_nodes(current_graph, models)
-    current_graph = draw_edges(current_graph, models)
-
-    # 3. Changes
-    find_significant_changes(previous_graph, current_graph)
-
-    # 4. Save current graph state
-    save_graph_state(current_graph, config.STATE_FILE)
-
-    logger.info("Dependency analysis completed.")
+        self.logger.info("Dependency analysis completed successfully.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        analyzer = SQLAnalyzer()
+        analyzer.run()
+    except Exception as e:
+        logging.getLogger('sql_analyzer').critical(f"A critical error occurred: {e}", exc_info=True)
+        exit(1)
