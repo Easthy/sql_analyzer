@@ -36,9 +36,6 @@ def run_analyzer_test(test_env, sql_filename, golden_filename):
     
     with open(state_file, 'r') as f:
         actual_graph = clean_and_sort_graph_data(json.load(f))
-
-    print(expected_graph)
-    print(actual_graph)
     
     assert actual_graph["nodes"] == expected_graph["nodes"], "Node lists do not match"
     assert actual_graph["links"] == expected_graph["links"], "Link lists do not match"
