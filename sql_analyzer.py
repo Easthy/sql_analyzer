@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import json
 import logging
 import warnings
@@ -530,7 +529,7 @@ class LineageGraph:
         """Saves the graph to a JSON file."""
         self.logger.info(f"Saving graph state to {state_file}...")
         try:
-            graph_data = json_graph.node_link_data(self.graph)
+            graph_data = json_graph.node_link_data(self.graph, edges="links")
             with state_file.open('w', encoding='utf-8') as f:
                 json.dump(graph_data, f, indent=2, ensure_ascii=False)
             self.logger.info("Graph state saved successfully.")
@@ -635,8 +634,8 @@ class ChangeDetector:
 class SQLAnalyzer:
     """Orchestrates the entire SQL dependency analysis process."""
     
-    def __init__(self):
-        self.config = ConfigManager()
+    def __init__(self, config=None):
+        self.config = config or ConfigManager()
         self.logger = logging.getLogger('sql_analyzer')
         # Dependency Injection: The analyzer uses components but doesn't create them.
         self.source_parser = SourceModelParser(self.config)

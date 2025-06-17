@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    { "id": "col:simple.create_table.user_id" },
+    { "id": "col:simple.create_table.registration_date" },
+    { "id": "tbl:simple.create_table" }
+  ],
+  "links": [
+    { "source": "tbl:simple.create_table", "target": "col:simple.create_table.user_id", "type": "contains_column" },
+    { "source": "tbl:simple.create_table", "target": "col:simple.create_table.registration_date", "type": "contains_column" }
+  ]
+}

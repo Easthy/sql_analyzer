@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    { "id": "col:simple.create_table_insert_without_columns_diff_name_with_alias.user_id" },
+    { "id": "col:simple.create_table_insert_without_columns_diff_name_with_alias.registration_date" },
+    { "id": "tbl:simple.create_table_insert_without_columns_diff_name_with_alias" },
+    { "id": "tbl:mwl._mysql_users" }
+  ],
+  "links": [
+    { "source": "tbl:simple.create_table_insert_without_columns_diff_name_with_alias", "target": "col:simple.create_table_insert_without_columns_diff_name_with_alias.user_id", "type": "contains_column" },
+    { "source": "tbl:simple.create_table_insert_without_columns_diff_name_with_alias", "target": "col:simple.create_table_insert_without_columns_diff_name_with_alias.registration_date", "type": "contains_column" },
+    { "source":"tbl:simple.create_table_insert_without_columns_diff_name_with_alias", "target":"tbl:mwl._mysql_users", "type":"table_dependency" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    { "id": "col:simple.create_table_as_select_from_table.name" },
+    { "id": "col:simple.create_table_as_select_from_table.user_id" },
+    { "id": "tbl:simple.create_table_as_select_from_table" },
+    { "id": "tbl:source.users" }
+  ],
+  "links": [
+    { "source": "tbl:simple.create_table_as_select_from_table", "target": "col:simple.create_table_as_select_from_table.name", "type": "contains_column" },
+    { "source": "tbl:simple.create_table_as_select_from_table", "target": "col:simple.create_table_as_select_from_table.user_id", "type": "contains_column" },
+    { "source": "tbl:simple.create_table_as_select_from_table", "target": "tbl:source.users", "type": "table_dependency" }
+  ]
+}

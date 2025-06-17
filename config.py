@@ -1,4 +1,3 @@
-# config.py
 from pathlib import Path
 
 # Project root (assuming config.py is located at or near the root)
