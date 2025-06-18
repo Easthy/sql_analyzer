@@ -14,7 +14,7 @@ def clean_and_sort_graph_data(graph_data: dict) -> dict:
     ], key=lambda x: (x["source"], x["target"]))
     return {"nodes": nodes, "links": links}
 
-def run_analyzer_test(test_env, sql_filename, golden_filename):
+def run_analyzer_test(test_env, sql_filename, golden_filename, sources_filename):
     """Common test logic for running analyzer and comparing with golden file."""
     # Setup test files
     sql_dir = test_env["sql_dir"]
@@ -22,6 +22,10 @@ def run_analyzer_test(test_env, sql_filename, golden_filename):
     
     sql_content = (TEST_DATA_DIR / "sql_models" / sql_filename).read_text()
     (sql_dir / sql_filename).write_text(sql_content)
+
+    if sources_filename:
+        source_model_content = (TEST_DATA_DIR / "sources" / sources_filename).read_text()
+        (test_env["tmp_path"] / "sources.yml").write_text(source_model_content)
 
     # Load and prepare expected result
     with open(TEST_DATA_DIR / "golden_files" / golden_filename, 'r') as f:
@@ -36,7 +40,10 @@ def run_analyzer_test(test_env, sql_filename, golden_filename):
     
     with open(state_file, 'r') as f:
         actual_graph = clean_and_sort_graph_data(json.load(f))
-    
+
+    print(expected_graph)
+    print(actual_graph)
+
     assert actual_graph["nodes"] == expected_graph["nodes"], "Node lists do not match"
     assert actual_graph["links"] == expected_graph["links"], "Link lists do not match"
     assert actual_graph == expected_graph, "Final graph does not match the golden file"
@@ -44,32 +51,48 @@ def run_analyzer_test(test_env, sql_filename, golden_filename):
 # Test cases configuration
 TEST_CASES = [
     ("simple.create_table_as_select_from_table.sql", 
-     "simple.create_table_as_select_from_table.json"),
+     "simple.create_table_as_select_from_table.json",
+     None),
 
     ("simple.create_table.sql", 
-     "simple.create_table.json"),
+     "simple.create_table.json",
+     None),
 
     ("simple.create_table_as_select_without_from.sql",
-     "simple.create_table_as_select_without_from.json"),
+     "simple.create_table_as_select_without_from.json",
+     None),
 
     ("simple.create_table_insert_with_columns_diff_name_with_alias.sql",
-     "simple.create_table_insert_with_columns_diff_name_with_alias.json"),
+     "simple.create_table_insert_with_columns_diff_name_with_alias.json",
+     None),
 
     ("simple.create_table_insert_with_columns_diff_name_without_alias.sql",
-     "simple.create_table_insert_with_columns_diff_name_without_alias.json"),
+     "simple.create_table_insert_with_columns_diff_name_without_alias.json",
+     None),
 
     ("simple.create_table_insert_with_columns_same_name.sql",
-    "simple.create_table_insert_with_columns_same_name.json"),
+    "simple.create_table_insert_with_columns_same_name.json",
+     None),
 
     ("simple.create_table_insert_without_columns_diff_name_with_alias.sql",
-     "simple.create_table_insert_without_columns_diff_name_with_alias.json"),
+     "simple.create_table_insert_without_columns_diff_name_with_alias.json",
+     None),
 
     ("simple.create_table_insert_without_columns_diff_name_without_alias.sql",
-     "simple.create_table_insert_without_columns_diff_name_without_alias.json")
+     "simple.create_table_insert_without_columns_diff_name_without_alias.json",
+     None),
+
+    ("simple.create_table_as_select_from_cte.sql",
+     "simple.create_table_as_select_from_cte.json",
+     None),
+
+    ("simple.create_table_as_select_from_nested_cte.sql",
+     "simple.create_table_as_select_from_nested_cte.json",
+     "simple.create_table_as_select_from_nested_cte.yml")
 ]
 
 # Generate individual test functions
-@pytest.mark.parametrize("sql_file,expected_file", TEST_CASES)
-def test_sql_analyzer(test_env, sql_file, expected_file):
+@pytest.mark.parametrize("sql_file,expected_file,sources_file", TEST_CASES)
+def test_sql_analyzer(test_env, sql_file, expected_file, sources_file):
     """Parametrized test for SQL analyzer."""
-    run_analyzer_test(test_env, sql_file, expected_file)
+    run_analyzer_test(test_env, sql_file, expected_file, sources_file)

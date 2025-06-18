@@ -347,15 +347,17 @@ class DependencyAnalyzer:
             if not main_statement: continue
                 
             try:
-                # Find all CTE to exclude then from the list of source tables
-                with_scope = main_statement.find(exp.With)
-                ctes = {cte.alias_or_name for cte in with_scope.expressions} if with_scope else set()
-                
+                # Search for nested CTEs
+                all_cte_nodes = main_statement.find_all(exp.CTE)
+                ctes = {cte.alias_or_name for cte in all_cte_nodes}
+
+                all_tables_in_query = main_statement.find_all(exp.Table)
+
                 source_tables = [
-                    tbl for tbl in main_statement.find_all(exp.Table)
+                    tbl for tbl in all_tables_in_query
                     if NameUtils.normalize_name(tbl.name) not in {NameUtils.normalize_name(c) for c in ctes}
                 ]
-
+                
                 processed_upstreams = set()
                 for table_expr in source_tables:
                     source_schema = table_expr.db if table_expr.db else '_temp'
@@ -656,6 +658,7 @@ class SQLAnalyzer:
 
         # 2. Parse all models from all sources
         source_models = self.source_parser.parse()
+
         sql_models = self.sql_parser.parse()
         models = source_models + sql_models
 

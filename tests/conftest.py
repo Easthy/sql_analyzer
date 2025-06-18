@@ -33,14 +33,15 @@ def test_env(tmp_path, monkeypatch):
         sql_dialect = "redshift"
         sql_file_extension = ".sql"
         normalize_names = True
-        source_models_file = None
+        source_models_file = tmp_path / "sources.yml"
     
     monkeypatch.setattr('sql_analyzer.ConfigManager', ConfigManager)
-    cfg_manager = ConfigManager()
+    config_manager = ConfigManager()
     
     # Provide the test with access to these paths
     yield {
-        "config_manager": cfg_manager,
+        "tmp_path": tmp_path,
+        "config_manager": config_manager,
         "sql_dir": sql_models_dir,
         "state_file": state_file
     }
