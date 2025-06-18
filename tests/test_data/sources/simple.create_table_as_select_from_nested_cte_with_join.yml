@@ -1,0 +1,6 @@
+source.users:
+  - id
+  - name
+source.user_status:
+  - user_id
+  - status
