@@ -1,6 +1,7 @@
 source.users:
   - id
   - name
+  - project_id
 source.user_status:
   - user_id
   - status
