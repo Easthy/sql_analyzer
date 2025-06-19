@@ -1,0 +1,9 @@
+source.users:
+  - id
+  - name
+source.user_status:
+  - user_id
+  - status
+reference.project:
+  - project_id
+  - name

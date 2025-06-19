@@ -41,9 +41,6 @@ def run_analyzer_test(test_env, sql_filename, golden_filename, sources_filename)
     with open(state_file, 'r') as f:
         actual_graph = clean_and_sort_graph_data(json.load(f))
 
-    print(expected_graph)
-    print(actual_graph)
-
     assert actual_graph["nodes"] == expected_graph["nodes"], "Node lists do not match"
     assert actual_graph["links"] == expected_graph["links"], "Link lists do not match"
     assert actual_graph == expected_graph, "Final graph does not match the golden file"
@@ -88,7 +85,15 @@ TEST_CASES = [
 
     ("simple.create_table_as_select_from_nested_cte.sql",
      "simple.create_table_as_select_from_nested_cte.json",
-     "simple.create_table_as_select_from_nested_cte.yml")
+     "simple.create_table_as_select_from_nested_cte.yml"),
+
+    ("simple.create_table_as_select_from_nested_cte_with_join.sql",
+     "simple.create_table_as_select_from_nested_cte_with_join.json",
+     "simple.create_table_as_select_from_nested_cte_with_join.yml"),
+
+    ("simple.create_table_as_select_from_nested_cte_with_two_join.sql",
+     "simple.create_table_as_select_from_nested_cte_with_two_join.json",
+     "simple.create_table_as_select_from_nested_cte_with_two_join.yml")
 ]
 
 # Generate individual test functions
