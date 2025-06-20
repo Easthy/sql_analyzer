@@ -7,7 +7,7 @@ WITH _cte AS (
                 FROM source.users
 
                      INNER JOIN reference.project
-                     ON users.project_id = users.project_id
+                     ON users.project_id = project.project_id
       )
       SELECT _nested_cte.*,
              user_status.status

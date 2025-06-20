@@ -1,0 +1,37 @@
+{
+  "nodes": [
+    { "id": "col:simple.create_table_as_select_join_case.name" },
+    { "id": "col:simple.create_table_as_select_join_case.user_id" },
+    { "id": "col:simple.create_table_as_select_join_case.status" },
+    { "id": "tbl:simple.create_table_as_select_join_case" },
+    { "id": "tbl:source.users" },
+    { "id": "col:source.users.id" },
+    { "id": "col:source.users.name" },
+    { "id": "col:source.users.status" },
+    { "id": "tbl:source.user_history" },
+    { "id": "col:source.user_history.user_id" },
+    { "id": "col:source.user_history.status" }
+  ],
+  "links": [
+    { "source": "tbl:simple.create_table_as_select_join_case", "target": "col:simple.create_table_as_select_join_case.name", "type": "contains_column" },
+    { "source": "tbl:simple.create_table_as_select_join_case", "target": "col:simple.create_table_as_select_join_case.user_id", "type": "contains_column" },
+    { "source": "tbl:simple.create_table_as_select_join_case", "target": "col:simple.create_table_as_select_join_case.status", "type": "contains_column" },
+
+    { "source": "tbl:simple.create_table_as_select_join_case", "target": "tbl:source.users", "type": "table_dependency" },
+    { "source": "tbl:simple.create_table_as_select_join_case", "target": "tbl:source.user_history", "type": "table_dependency" },
+    
+    { "source": "tbl:source.users", "target": "col:source.users.id", "type": "contains_column" },
+    { "source": "tbl:source.users", "target": "col:source.users.name", "type": "contains_column" },
+    { "source": "tbl:source.users", "target": "col:source.users.status", "type": "contains_column" },
+    
+    {"source": "col:simple.create_table_as_select_join_case.status", "target": "col:source.users.id", "type": "column_dependency"},
+
+    { "source": "tbl:source.user_history", "target": "col:source.user_history.user_id", "type": "contains_column" },
+    { "source": "tbl:source.user_history", "target": "col:source.user_history.status", "type": "contains_column" },
+
+    { "source": "col:simple.create_table_as_select_join_case.user_id", "target": "col:source.users.id", "type": "column_dependency" },
+    { "source": "col:simple.create_table_as_select_join_case.name", "target": "col:source.users.name", "type": "column_dependency" },
+    { "source": "col:simple.create_table_as_select_join_case.status", "target": "col:source.users.status", "type": "column_dependency" },
+    { "source": "col:simple.create_table_as_select_join_case.status", "target": "col:source.user_history.status", "type": "column_dependency" }
+  ]
+}

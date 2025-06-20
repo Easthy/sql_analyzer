@@ -97,7 +97,11 @@ TEST_CASES = [
 
     ("simple.create_table_as_select_from_nested_cte_with_two_join_union_coalesce.sql",
      "simple.create_table_as_select_from_nested_cte_with_two_join_union_coalesce.json",
-     "simple.create_table_as_select_from_nested_cte_with_two_join_union_coalesce.yml")
+     "simple.create_table_as_select_from_nested_cte_with_two_join_union_coalesce.yml"),
+
+    ("simple.create_table_as_select_join_case.sql",
+     "simple.create_table_as_select_join_case.json",
+     "simple.create_table_as_select_join_case.yml")
 ]
 
 # Generate individual test functions

@@ -1,0 +1,7 @@
+source.users:
+  - id
+  - name
+  - status
+source.user_history:
+  - user_id
+  - status
