@@ -1,0 +1,122 @@
+{
+  "nodes": [
+    { "id": "col:simple.create_table_cte_join_aggregate_on_window.email" },
+    { "id": "col:simple.create_table_cte_join_aggregate_on_window.payment_cnt" },
+    { "id": "col:simple.create_table_cte_join_aggregate_on_window.status" },
+    { "id": "col:simple.create_table_cte_join_aggregate_on_window.user_id" },
+    { "id": "col:source.user.email" },
+    { "id": "col:source.user.id" },
+    { "id": "col:source.user.load_date" },
+    { "id": "col:source.user_payment.id" },
+    { "id": "col:source.user_payment.operation_id" },
+    { "id": "col:source.user_payment.user_id" },
+    { "id": "col:source.user_status.status" },
+    { "id": "col:source.user_status.user_id" },
+    { "id": "tbl:simple.create_table_cte_join_aggregate_on_window" },
+    { "id": "tbl:source.user" },
+    { "id": "tbl:source.user_payment"},
+    { "id": "tbl:source.user_status" }
+  ],
+  "links": [
+    {
+      "source": "col:simple.create_table_cte_join_aggregate_on_window.email",
+      "target": "col:source.user.email",
+      "type": "column_dependency"
+    },
+    {
+      "source": "col:simple.create_table_cte_join_aggregate_on_window.payment_cnt",
+      "target": "col:source.user_payment.id",
+      "type": "column_dependency"
+    },
+    {
+      "source": "col:simple.create_table_cte_join_aggregate_on_window.payment_cnt",
+      "target": "col:source.user_payment.operation_id",
+      "type": "column_dependency"
+    },
+    {
+      "source": "col:simple.create_table_cte_join_aggregate_on_window.status",
+      "target": "col:source.user_status.status",
+      "type": "column_dependency"
+    },
+    {
+      "source": "col:simple.create_table_cte_join_aggregate_on_window.user_id",
+      "target": "col:source.user.id",
+      "type": "column_dependency"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "col:simple.create_table_cte_join_aggregate_on_window.email",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "col:simple.create_table_cte_join_aggregate_on_window.payment_cnt",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "col:simple.create_table_cte_join_aggregate_on_window.status",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "col:simple.create_table_cte_join_aggregate_on_window.user_id",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "tbl:source.user",
+      "type": "table_dependency"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "tbl:source.user_payment",
+      "type": "table_dependency"
+    },
+    {
+      "source": "tbl:simple.create_table_cte_join_aggregate_on_window",
+      "target": "tbl:source.user_status",
+      "type": "table_dependency"
+    },
+    {
+      "source": "tbl:source.user",
+      "target": "col:source.user.email",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user",
+      "target": "col:source.user.id",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user",
+      "target": "col:source.user.load_date",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user_payment",
+      "target": "col:source.user_payment.id",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user_payment",
+      "target": "col:source.user_payment.operation_id",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user_payment",
+      "target": "col:source.user_payment.user_id",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user_status",
+      "target": "col:source.user_status.status",
+      "type": "contains_column"
+    },
+    {
+      "source": "tbl:source.user_status",
+      "target": "col:source.user_status.user_id",
+      "type": "contains_column"
+    }
+  ]
+}

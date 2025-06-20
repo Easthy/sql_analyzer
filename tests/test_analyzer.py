@@ -101,7 +101,11 @@ TEST_CASES = [
 
     ("simple.create_table_as_select_join_case.sql",
      "simple.create_table_as_select_join_case.json",
-     "simple.create_table_as_select_join_case.yml")
+     "simple.create_table_as_select_join_case.yml"),
+
+    ("simple.create_table_cte_join_aggregate_on_window.sql",
+     "simple.create_table_cte_join_aggregate_on_window.json",
+     "simple.create_table_cte_join_aggregate_on_window.yml")
 ]
 
 # Generate individual test functions

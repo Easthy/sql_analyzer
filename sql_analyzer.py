@@ -37,6 +37,7 @@ class ConfigManager:
         self.sql_file_extension = getattr(config, 'SQL_FILE_EXTENSION', '.sql')
         self.normalize_names = getattr(config, 'NORMALIZE_NAMES', True)
         self.source_models_file = getattr(config, 'SQL_SOURCE_MODELS', None)
+        self.indirect_flow = getattr(config, 'INDIRECT', False)
         
         self.setup_logging()
 
@@ -325,12 +326,6 @@ class DependencyAnalyzer:
     def __init__(self, cfg: ConfigManager):
         self.config = cfg
         self.logger = logging.getLogger('sql_analyzer.analyzer')
-
-    def analyze_dependencies(self, models: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
-        """Runs all dependency analysis phases."""
-        models, new_sources = self.analyze_table_dependencies(models)
-        models = self.analyze_column_dependencies(models)
-        return models, new_sources
         
     def analyze_table_dependencies(self, models: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
         """Finds table-level dependencies for each model."""
@@ -416,15 +411,24 @@ class DependencyAnalyzer:
 
                 target_col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], col_name)
                 try:
-                    lineage_node = sqlglot_lineage(
+                    direct_lineage_node = sqlglot_lineage(
                         column=select_col_name,
                         sql=main_statement,
                         dialect=self.config.sql_dialect
                     )
-                    source_col_ids = self._find_source_cols_from_lineage_node(lineage_node)
-                    if source_col_ids:
+
+                    direct_source_col_ids = self._find_source_cols_from_lineage_node(direct_lineage_node)
+
+                    if self.config.indirect_flow:
+                        # Somewhere here we can search for indirect colum dependency
+                        # where = main_statement.find_all(exp.Where)
+                        # joins = main_statement.find_all(exp.Join)
+                        # group_by = main_statement.find_all(exp.GroupBy)
+                        pass
+
+                    if direct_source_col_ids:
                          model['column_dependency'][col_name] = [
-                             {'target_col_id': target_col_id, 'source_col_id': src_id} for src_id in source_col_ids
+                             {'target_col_id': target_col_id, 'source_col_id': src_id} for src_id in direct_source_col_ids
                          ]
                 except Exception as e:
                     self.logger.warning(f"Could not analyze lineage for column '{col_name}' in {model['model_id']}: {e}")

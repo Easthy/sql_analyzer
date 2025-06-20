@@ -1,0 +1,11 @@
+source.user:
+  - id
+  - load_date
+  - email
+source.user_status:
+  - user_id
+  - status
+source.user_payment:
+  - user_id
+  - operation_id
+  - id

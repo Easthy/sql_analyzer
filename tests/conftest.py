@@ -34,6 +34,7 @@ def test_env(tmp_path, monkeypatch):
         sql_file_extension = ".sql"
         normalize_names = True
         source_models_file = tmp_path / "sources.yml"
+        indirect_flow = False
     
     monkeypatch.setattr('sql_analyzer.ConfigManager', ConfigManager)
     config_manager = ConfigManager()
