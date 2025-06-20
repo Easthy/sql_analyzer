@@ -1,0 +1,20 @@
+source.users:
+  - id
+  - name
+  - project_id
+source.user_status:
+  - user_id
+  - status
+source.user_history:
+  - user_id
+  - name
+  - status
+  - project_id
+source.imported_users:
+  - user_id
+  - name
+  - status
+  - project_id
+reference.project:
+  - project_id
+  - name
