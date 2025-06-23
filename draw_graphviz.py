@@ -43,11 +43,13 @@ dot = Digraph(
     engine='dot',
     graph_attr={
         'rankdir': RANKDIR,
-        'splines': 'ortho',
+        'splines': 'curved',
         'overlap': 'false',
         'fontsize': FONT_SIZE,
-        'nodesep': '0.5',
-        'ranksep': '1.0',
+        'nodesep': '0.7',
+        'ranksep': '1.1',
+        'maxiter': '1000',
+        'remincross': 'true'
     },
     node_attr={
         'fontname': 'Arial',
@@ -73,7 +75,7 @@ for node in G.nodes():
             style='filled',
             fillcolor=TABLE_NODE_COLOR,
             color=TABLE_BORDER_COLOR,
-            penwidth='1.5'
+            penwidth='1.7'
         )
     elif attrs['type'] == 'col':
         label = f"{attrs.get('column', '')}"
