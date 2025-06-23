@@ -5,11 +5,11 @@ Ideally, this could also be used to automatically generate tests.
 #### Why
 Existing solutions like dbt and sqlmesh impose certain limitations — while they do solve the problem of dependecies, they require integration into the project (a lot of rework) and introduces additional constraints (for example, you may no longer be able to write raw DDL when you really need it), or new issues (sqlmesh is still somewhat immature, unfortunately).
 
-#### An example of the graph is shown in graph_output.png (draw_graph.py)
-![alt text](https://github.com/Easthy/sql_analyzer/blob/main/graph_output.png)
+#### An example of the graph is shown in graph_output.png (draw_graphviz.py)
+![alt text](https://github.com/Easthy/sql_analyzer/blob/main/dependency_graph.png)
 
 #### An example of the graph is shown in graph_output.png (draw_graph.py)
-![alt text](https://github.com/Easthy/sql_analyzer/blob/main/dependency_graph.png)
+![alt text](https://github.com/Easthy/sql_analyzer/blob/main/graph_output.png)
 
 #### Issues
 - There is a problem if the DISTKEY is defined right after a column's data type (sqlglot throws an error). It should be defined after all columns
