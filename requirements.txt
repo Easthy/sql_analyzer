@@ -2,5 +2,5 @@ networkx==3.4.2
 sqlglot==26.28.1
 sqlglotrs==0.6.1
 PyYAML==6.0.2
-rich==14.0.0
+rich==13.9.4
 graphviz==0.21

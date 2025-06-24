@@ -22,6 +22,9 @@ SQL_DIALECT = "redshift"
 # File extension for SQL model files
 SQL_FILE_EXTENSION = ".sql"
 
+# Parsing of indirect flow
+INDIRECT = True
+
 # Logging settings
 LOG_LEVEL = "INFO"
 LOG_FORMAT = '%(levelname)s - %(message)s'

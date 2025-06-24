@@ -4,6 +4,7 @@ import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any
+from collections import defaultdict 
 
 import networkx as nx
 import sqlglot
@@ -331,7 +332,9 @@ class DependencyAnalyzer:
         """Finds table-level dependencies for each model."""
         self.logger.info("--- Phase 3: Analyzing table-to-table dependencies ---")
         existing_model_ids = {m['model_id'] for m in models}
+        
         undiscovered_source_ids = set()
+        undiscovered_source_columns: Dict[str, Set[str]] = defaultdict(set)
 
         for model in models:
             if model.get("source_type") != "model":
@@ -352,7 +355,24 @@ class DependencyAnalyzer:
                     tbl for tbl in all_tables_in_query
                     if NameUtils.normalize_name(tbl.name) not in {NameUtils.normalize_name(c) for c in ctes}
                 ]
-                
+
+                # --- Searching for columns of source tables ---
+                # Create a map: table alias -> (schema, table_name)
+                # This will help us link a column (e.g., "alias.col") to its full table
+                alias_to_table_map = {}
+                for tbl in source_tables:
+                    schema = tbl.db or '_temp'
+                    alias_to_table_map[NameUtils.normalize_name(tbl.alias_or_name)] = (schema, tbl.name)
+
+                for col in main_statement.find_all(exp.Column):
+                    table_alias = NameUtils.normalize_name(col.table)
+                    if table_alias in alias_to_table_map:
+                        source_schema, source_table_name = alias_to_table_map[table_alias]
+                        source_model_id = NameUtils.format_node_id(TBL_PREFIX, source_schema, source_table_name)
+                        
+                        undiscovered_source_columns[source_model_id].add(col.this.name)
+                ###############
+
                 processed_upstreams = set()
                 for table_expr in source_tables:
                     source_schema = table_expr.db if table_expr.db else '_temp'
@@ -384,6 +404,22 @@ class DependencyAnalyzer:
                     "schema": parsed_id["schema"], "name": parsed_id["table"],
                     "source_type": 'source_table', "model_id": model_id, "columns": []
                 })
+
+        # --- Enrich all source models (from YAML and new ones) with the discovered columns ---
+        all_source_models = [m for m in models if m['source_type'] == 'source_table'] + new_source_models
+        self.logger.info(f"Enriching {len(all_source_models)} source models with columns discovered from SQL queries.")
+        
+        for source_model in all_source_models:
+            model_id = source_model['model_id']
+            if model_id in undiscovered_source_columns:
+                # # Merge the columns from YAML (if any) with the ones discovered in SQL
+                existing_cols = set(source_model.get('columns', []))
+                discovered_cols = undiscovered_source_columns[model_id]
+                
+                if discovered_cols - existing_cols:
+                    self.logger.debug(f"Discovered new columns for {model_id}: {sorted(list(discovered_cols - existing_cols))}")
+                
+                source_model['columns'] = sorted(list(existing_cols.union(discovered_cols)))
 
         return models, new_source_models
 

@@ -3,11 +3,17 @@
     { "id": "col:simple.create_table_as_select_from_cte.name" },
     { "id": "col:simple.create_table_as_select_from_cte.user_id" },
     { "id": "tbl:simple.create_table_as_select_from_cte" },
-    { "id": "tbl:source.users" }
+    { "id": "tbl:source.users" },
+    { "id": "col:source.users.name" },
+    { "id": "col:source.users.id" }
   ],
   "links": [
     { "source": "tbl:simple.create_table_as_select_from_cte", "target": "col:simple.create_table_as_select_from_cte.name", "type": "contains_column" },
     { "source": "tbl:simple.create_table_as_select_from_cte", "target": "col:simple.create_table_as_select_from_cte.user_id", "type": "contains_column" },
-    { "source": "tbl:simple.create_table_as_select_from_cte", "target": "tbl:source.users", "type": "table_dependency" }
+    { "source": "tbl:simple.create_table_as_select_from_cte", "target": "tbl:source.users", "type": "table_dependency" },
+    { "source": "tbl:source.users", "target": "col:source.users.name", "type": "contains_column" },
+    { "source": "tbl:source.users", "target": "col:source.users.id", "type": "contains_column" },
+    { "source": "col:simple.create_table_as_select_from_cte.name", "target": "col:source.users.name", "type": "column_dependency" },
+    { "source": "col:simple.create_table_as_select_from_cte.user_id", "target": "col:source.users.id", "type": "column_dependency" }
   ]
 }

@@ -5,6 +5,11 @@ Ideally, this could also be used to automatically generate tests.
 #### Why
 Existing solutions like dbt and sqlmesh impose certain limitations — while they do solve the problem of dependecies, they require integration into the project (a lot of rework) and introduces additional constraints (for example, you may no longer be able to write raw DDL when you really need it), or new issues (sqlmesh is still somewhat immature, unfortunately).
 
+### How to Use
+You should place all source table definitions into a `source.yml` file.  
+The model's name will be parsed from the file name, which must follow the template `schema.table_name.sql`.  
+Run the `sql_analyzer.py` script; the result will be saved as `dependency_state.json`. Then, you can execute `draw_graphviz.py` or `draw_graph.py` to generate graphs in `dependency_graph.png` and `graph_output.png` files, respectively.
+
 #### An example of the graph is shown in graph_output.png (draw_graphviz.py)
 ![alt text](https://github.com/Easthy/sql_analyzer/blob/main/dependency_graph.png)
 
