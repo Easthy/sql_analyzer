@@ -8,10 +8,10 @@ Existing solutions like dbt and sqlmesh impose certain limitations — while the
 ### How to Use
 You should place all source table definitions into a `source.yml` file.  
 The model's name will be parsed from the file name, which must follow the template `schema.table_name.sql`.  
-Run the `sql_analyzer.py` script; the result will be saved as `dependency_state.json`. Then, you can execute `draw_graphviz.py` or `draw_graph.py` to generate graphs in `dependency_graph.png` and `graph_output.png` files, respectively.
+Run the `sql_analyzer.py` script; the result will be saved as `dependency_state.json`. Then, you can execute `draw_graphviz.py` or `draw_graph.py` to generate graphs in `dependency_graph.png` and `graph_output.png` files, respectively
 
 #### An example of the graph is shown in graph_output.png (draw_graphviz.py)
-![alt text](https://github.com/Easthy/sql_analyzer/blob/main/dependency_graph.png)
+![alt_text](https://github.com/Easthy/sql_analyzer/blob/main/dependency_graph.png)
 
 #### An example of the graph is shown in graph_output.png (draw_graph.py)
 ![alt text](https://github.com/Easthy/sql_analyzer/blob/main/graph_output.png)
