@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -191,7 +192,74 @@ class SqlModelParser(ModelParser):
                 self.logger.warning(f"Skipping file (could not determine model name): {file_path.name}")
         
         self.logger.info(f"Parsed {len(all_operations)} relevant CREATE/INSERT operations from {processed_files} files.")
+        all_operations = self._expand_wildcard_columns(all_operations)
         return all_operations
+
+    def _expand_wildcard_columns(self, operations: List[Dict]) -> List[Dict]:
+        """Resolve '*' entries in a model's column list using the source table's columns.
+
+        Handles cases like `INSERT INTO public.user (SELECT DISTINCT * FROM user_tmp)`.
+        Runs iteratively so chains where the source is itself populated by a
+        later pass (e.g. user_tmp's explicit column list) are resolved too.
+        """
+        model_map = {op['model_id']: op for op in operations}
+
+        made_progress = True
+        iterations = 0
+        while made_progress and iterations < 10:
+            made_progress = False
+            iterations += 1
+            for op in operations:
+                columns = op.get('columns') or []
+                if '*' not in columns:
+                    continue
+
+                main_statement = op.get('main_statement')
+                if main_statement is None or main_statement.expression is None:
+                    continue
+
+                select_part = main_statement.expression.find(exp.Select)
+                if not select_part:
+                    continue
+
+                ctes = {NameUtils.normalize_name(cte.alias_or_name)
+                        for cte in main_statement.find_all(exp.CTE)}
+                from_tables = [
+                    t for t in select_part.find_all(exp.Table)
+                    if NameUtils.normalize_name(t.name) not in ctes
+                ]
+
+                if len(from_tables) != 1:
+                    continue
+
+                src = from_tables[0]
+                src_schema = src.db or '_temp'
+                src_id = NameUtils.format_node_id(TBL_PREFIX, src_schema, src.name)
+                src_op = model_map.get(src_id)
+                if not src_op:
+                    continue
+                src_cols = src_op.get('columns') or []
+                if not src_cols or '*' in src_cols:
+                    continue
+
+                expanded: List[str] = []
+                for c in columns:
+                    if c == '*':
+                        for sc in src_cols:
+                            if sc not in expanded:
+                                expanded.append(sc)
+                    elif c not in expanded:
+                        expanded.append(c)
+
+                if expanded != columns:
+                    op['columns'] = expanded
+                    op['wildcard_source_id'] = src_id
+                    self.logger.info(
+                        f"Expanded '*' in {op['model_id']} via {src_id}: {len(expanded)} columns."
+                    )
+                    made_progress = True
+
+        return operations
 
     def _find_sql_files(self) -> List[Path]:
         """Recursively finds all SQL files in the directory."""
@@ -211,11 +279,23 @@ class SqlModelParser(ModelParser):
         schema, table_name = name_parts[0], '.'.join(name_parts[1:])
         return schema, table_name
     
+    # Column-level DISTKEY/SORTKEY attributes (Redshift) are not accepted by sqlglot
+    # in column definitions, e.g.:
+    #   CREATE TABLE t ( col INT ENCODE ZSTD DISTKEY, ... )
+    # They carry no meaning for lineage analysis, so we strip them before parsing.
+    # The negative lookahead guards the table-level form `DISTKEY(col) / SORTKEY(col)`.
+    _REDSHIFT_COL_KEY_RE = re.compile(r'(?i)\b(DISTKEY|SORTKEY)\b(?!\s*\()')
+
+    def _preprocess_sql(self, sql_content: str) -> str:
+        """Strips dialect-specific tokens sqlglot cannot parse in column definitions."""
+        return self._REDSHIFT_COL_KEY_RE.sub('', sql_content)
+
     def _parse_sql_file(self, model_id: str, file_path: Path) -> List[Dict]:
         """Parses a single SQL file for all CREATE/INSERT operations."""
         relative_path = str(file_path.relative_to(self.config.sql_models_dir))
         try:
             sql_content = file_path.read_text(encoding='utf-8')
+            sql_content = self._preprocess_sql(sql_content)
             statements = sqlglot.parse(sql=sql_content, read=self.config.sql_dialect)
         except Exception as e:
             self.logger.error(f"Error reading or parsing file {file_path}: {e}")
@@ -240,7 +320,10 @@ class SqlModelParser(ModelParser):
             model_id = op['model_id']
 
             if isinstance(op['main_statement'], exp.Insert):
-                if model_id in creates: # If a CREATE also exists, use its column definition
+                # Use CREATE's column definition only when it actually has one.
+                # CREATE TABLE ... (LIKE other_table) yields an empty list, which would
+                # otherwise wipe out the explicit column list from INSERT INTO t (c1, c2, ...).
+                if model_id in creates and creates[model_id]['columns']:
                     op['columns'] = creates[model_id]['columns']
                 final_ops.append(op)
             elif isinstance(op['main_statement'], exp.Create):
@@ -299,8 +382,8 @@ class SqlModelParser(ModelParser):
                         col.name for col in columns_in_target if isinstance(col, exp.Identifier)
                     ]
 
-                # Columns from SELECT statement
-                elif isinstance(statement.expression, (exp.Select, exp.Union)):
+                # Columns from SELECT statement (may be wrapped in a Subquery: INSERT INTO t (SELECT ...))
+                elif statement.expression is not None:
                     select_part = statement.expression.find(exp.Select)
                     if select_part:
                         target_columns = [str(col.alias_or_name) for col in select_part.expressions if col.alias_or_name]
@@ -433,6 +516,30 @@ class DependencyAnalyzer:
             model['column_dependency'] = {}
             main_statement = model.get("main_statement")
             if not main_statement: continue
+
+            # Short-circuit when the INSERT/CREATE uses `SELECT *` and we recorded the
+            # resolved source table during wildcard expansion. sqlglot.lineage cannot
+            # trace `*`, so we emit a direct 1:1 column-name mapping to that source.
+            wildcard_src_id = model.get('wildcard_source_id')
+            if wildcard_src_id:
+                try:
+                    select_part = main_statement.expression.find(exp.Select) if main_statement.expression is not None else None
+                    select_exprs = list(select_part.expressions) if select_part else []
+                    pure_wildcard = len(select_exprs) == 1 and isinstance(select_exprs[0], exp.Star)
+                except Exception:
+                    pure_wildcard = False
+
+                if pure_wildcard:
+                    src_parsed = NameUtils.parse_node_id(wildcard_src_id)
+                    for col_name in model['columns']:
+                        target_col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], col_name)
+                        source_col_id = NameUtils.format_node_id(
+                            COL_PREFIX, src_parsed['schema'], src_parsed['table'], col_name
+                        )
+                        model['column_dependency'][col_name] = [
+                            {'target_col_id': target_col_id, 'source_col_id': source_col_id}
+                        ]
+                    continue
 
             # Map target columns to their corresponding SELECT expressions
             try:

@@ -16,6 +16,9 @@ Run the `sql_analyzer.py` script; the result will be saved as `dependency_state.
 #### An example of the graph is shown in graph_output.png (draw_graph.py)
 ![alt text](https://github.com/Easthy/sql_analyzer/blob/main/graph_output.png)
 
+#### How to run tests
+`python -m pytest tests/`
+
 #### Issues
 - There is a problem if the DISTKEY is defined right after a column's data type (sqlglot throws an error). It should be defined after all columns
 - Only direct dependencies will be found. For example, if your column col_1 does not directly depend on col_2, but you use col_2 to filter rows, then col_2 will not be considered its ancestor.
