@@ -14,7 +14,7 @@ from networkx.readwrite import json_graph
 from rich.logging import RichHandler
 from sqlglot import Expression
 import sqlglot.expressions as exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ErrorLevel, ParseError
 from sqlglot.lineage import Node as LineageNode
 from sqlglot.lineage import lineage as sqlglot_lineage
 
@@ -286,6 +286,27 @@ class SqlModelParser(ModelParser):
     # The negative lookahead guards the table-level form `DISTKEY(col) / SORTKEY(col)`.
     _REDSHIFT_COL_KEY_RE = re.compile(r'(?i)\b(DISTKEY|SORTKEY)\b(?!\s*\()')
 
+    # Jinja templating: sqlglot cannot parse template tokens.
+    # We strip them before handing SQL to the parser. {{ expr }} is substituted
+    # by a neutral identifier so that surrounding SQL stays syntactically valid
+    # in both value and identifier positions (SELECT __jinja__, FROM __jinja__).
+    _JINJA_COMMENT_RE = re.compile(r'\{#.*?#\}', re.DOTALL)
+    _JINJA_STATEMENT_RE = re.compile(r'\{%-?.*?-?%\}', re.DOTALL)
+    _JINJA_EXPRESSION_RE = re.compile(r'\{\{-?.*?-?\}\}', re.DOTALL)
+    _JINJA_PLACEHOLDER = '__jinja__'
+
+    def _strip_jinja(self, sql_content: str) -> str:
+        """Removes Jinja comments / statements and replaces expressions with a placeholder.
+
+        Generic enough to survive arbitrary Jinja templating without trying to
+        execute it: the goal is only to keep sqlglot from choking on `{{ ... }}`,
+        `{% ... %}` and `{# ... #}` tokens.
+        """
+        sql_content = self._JINJA_COMMENT_RE.sub('', sql_content)
+        sql_content = self._JINJA_STATEMENT_RE.sub('', sql_content)
+        sql_content = self._JINJA_EXPRESSION_RE.sub(self._JINJA_PLACEHOLDER, sql_content)
+        return sql_content
+
     def _preprocess_sql(self, sql_content: str) -> str:
         """Strips dialect-specific tokens sqlglot cannot parse in column definitions."""
         return self._REDSHIFT_COL_KEY_RE.sub('', sql_content)
@@ -295,14 +316,29 @@ class SqlModelParser(ModelParser):
         relative_path = str(file_path.relative_to(self.config.sql_models_dir))
         try:
             sql_content = file_path.read_text(encoding='utf-8')
+            sql_content = self._strip_jinja(sql_content)
             sql_content = self._preprocess_sql(sql_content)
-            statements = sqlglot.parse(sql=sql_content, read=self.config.sql_dialect)
+            # error_level=IGNORE: unparseable statements (LOCK, VACUUM, GRANT, dialect
+            # extensions sqlglot doesn't support, ...) become None in the list instead
+            # of aborting the whole file. We filter None out below.
+            statements = sqlglot.parse(
+                sql=sql_content,
+                read=self.config.sql_dialect,
+                error_level=ErrorLevel.IGNORE,
+            )
         except Exception as e:
             self.logger.error(f"Error reading or parsing file {file_path}: {e}")
             return []
 
         if not statements:
             return []
+
+        skipped = sum(1 for s in statements if s is None)
+        if skipped:
+            self.logger.warning(
+                f"{file_path.name}: skipped {skipped} unparseable statement(s) "
+                f"(likely dialect-specific DDL like LOCK/VACUUM/GRANT)."
+            )
 
         parsed_operations = [
             op for stmt in statements if stmt and (op := self._extract_statement_info(stmt, model_id, relative_path))
