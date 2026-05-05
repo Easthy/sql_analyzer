@@ -25,6 +25,15 @@ SQL_FILE_EXTENSION = ".sql"
 # Parsing of indirect flow
 INDIRECT = True
 
+# Impact-analysis: schemas to hide from the impact report (still traversed).
+# Useful for transient buckets like '_temp' that pollute downstream lists.
+IMPACT_HIDDEN_SCHEMAS = {'_temp'}
+
+# When True, also print a low-confidence "table-level reachability" tier next
+# to the precise (column-traced) impact list. Set to False to keep only the
+# precise list.
+IMPACT_SHOW_TABLE_LEVEL_FALLBACK = True
+
 # Logging settings
 LOG_LEVEL = "INFO"
 LOG_FORMAT = '%(levelname)s - %(message)s'

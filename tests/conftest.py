@@ -35,6 +35,8 @@ def test_env(tmp_path, monkeypatch):
         normalize_names = True
         source_models_file = tmp_path / "sources.yml"
         indirect_flow = False
+        impact_hidden_schemas: set = set()
+        impact_show_table_level_fallback = True
     
     monkeypatch.setattr('sql_analyzer.ConfigManager', ConfigManager)
     config_manager = ConfigManager()

@@ -26,6 +26,12 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 TBL_PREFIX = "tbl"
 COL_PREFIX = "col"
 
+# Edge types used in the lineage graph. Centralised so traversals can filter
+# by edge semantics instead of walking every connection.
+EDGE_CONTAINS = "contains_column"
+EDGE_TBL_DEP = "table_dependency"
+EDGE_COL_DEP = "column_dependency"
+
 class ConfigManager:
     """
     Manages application configuration and sets up logging.
@@ -40,7 +46,18 @@ class ConfigManager:
         self.normalize_names = getattr(config, 'NORMALIZE_NAMES', True)
         self.source_models_file = getattr(config, 'SQL_SOURCE_MODELS', None)
         self.indirect_flow = getattr(config, 'INDIRECT', False)
-        
+
+        # Impact-analysis options. Tables in these schemas are still traversed
+        # during propagation but suppressed from the user-facing report.
+        self.impact_hidden_schemas: Set[str] = set(
+            getattr(config, 'IMPACT_HIDDEN_SCHEMAS', {'_temp'})
+        )
+        # When True, a low-confidence "table-level reachability" tier is also
+        # printed in addition to the column-precise impact list.
+        self.impact_show_table_level_fallback: bool = getattr(
+            config, 'IMPACT_SHOW_TABLE_LEVEL_FALLBACK', True
+        )
+
         self.setup_logging()
 
     def _validate_config(self):
@@ -696,19 +713,19 @@ class LineageGraph:
             for column in model.get('columns', []):
                 col_id = NameUtils.format_node_id(COL_PREFIX, model['schema'], model['name'], column)
                 if self.graph.has_node(model_id) and self.graph.has_node(col_id):
-                    self.graph.add_edge(model_id, col_id, type='contains_column')
+                    self.graph.add_edge(model_id, col_id, type=EDGE_CONTAINS)
 
             # Table -> Table dependency
             for upstream_id in model.get('table_dependency', []):
                 if self.graph.has_node(model_id) and self.graph.has_node(upstream_id):
-                    self.graph.add_edge(model_id, upstream_id, type='table_dependency')
+                    self.graph.add_edge(model_id, upstream_id, type=EDGE_TBL_DEP)
 
             # Column -> Column dependency
             for deps in model.get('column_dependency', {}).values():
                 for dep in deps:
                     target, source = dep['target_col_id'], dep['source_col_id']
                     if self.graph.has_node(target) and self.graph.has_node(source):
-                        self.graph.add_edge(target, source, type='column_dependency')
+                        self.graph.add_edge(target, source, type=EDGE_COL_DEP)
     
     def save_state(self, state_file: Path):
         """Saves the graph to a JSON file."""
@@ -743,11 +760,30 @@ class LineageGraph:
 
 
 class ChangeDetector:
-    """Compares two LineageGraph instances and reports significant changes."""
+    """Compares two LineageGraph instances and reports significant changes.
 
-    def __init__(self, old_graph: Optional[LineageGraph], new_graph: LineageGraph):
+    Impact analysis is column-aware: column-level changes propagate only along
+    column_dependency edges, table-level changes only along table_dependency
+    edges. Column changes never get inflated to "the whole table changed",
+    which previously triggered a transitive table-level explosion.
+
+    Reported impact is split into two confidence tiers:
+      * "precise"  — derived from column lineage; high confidence,
+      * "fallback" — table-level reachability; may include false positives
+                     and is only meant to backstop missing column lineage.
+    """
+
+    def __init__(
+        self,
+        old_graph: Optional[LineageGraph],
+        new_graph: LineageGraph,
+        hidden_schemas: Optional[Set[str]] = None,
+        show_table_level_fallback: bool = True,
+    ):
         self.old_graph = old_graph.graph if old_graph else nx.DiGraph()
         self.new_graph = new_graph.graph
+        self.hidden_schemas = set(hidden_schemas or set())
+        self.show_table_level_fallback = show_table_level_fallback
         self.logger = logging.getLogger('sql_analyzer.detector')
 
     def report_changes(self):
@@ -776,44 +812,164 @@ class ChangeDetector:
         if added_edges: self.logger.info(f"Added dependencies ({len(added_edges)}): {sorted([f'{u} -> {v}' for u, v in added_edges])}")
         if removed_edges: self.logger.info(f"Removed dependencies ({len(removed_edges)}): {sorted([f'{u} -> {v}' for u, v in removed_edges])}")
 
-        self._analyze_impact(removed_nodes, removed_edges)
+        self._analyze_impact(removed_nodes, removed_edges, added_nodes, added_edges)
         self.logger.info("-" * 30)
 
-    def _analyze_impact(self, removed_nodes: Set[str], removed_edges: Set[Tuple[str, str]]):
-        """Analyzes the downstream impact of removed nodes and edges."""
-        
-        # Find nodes in the new graph that were affected by removals
-        directly_affected = set()
-        for u, v in removed_edges:
-            if u in self.new_graph and v in self.new_graph:
-                directly_affected.add(u) # A dependency was removed
-        
-        for node in removed_nodes:
-            # Find nodes that USED to depend on the removed node
-            if node in self.old_graph:
-                for predecessor in self.old_graph.predecessors(node):
-                    if predecessor in self.new_graph:
-                        directly_affected.add(predecessor)
+    def _analyze_impact(
+        self,
+        removed_nodes: Set[str],
+        removed_edges: Set[Tuple[str, str]],
+        added_nodes: Set[str],
+        added_edges: Set[Tuple[str, str]],
+    ):
+        """Reports column- and table-level impact in two confidence tiers."""
+        column_seeds, table_seeds = self._classify_change_seeds(
+            removed_nodes, removed_edges, added_nodes, added_edges
+        )
 
-        if not directly_affected:
+        if not column_seeds and not table_seeds:
             self.logger.info("Removed elements did not affect any existing models.")
             return
 
         self.logger.info("--- Analyzing impact of removed/modified dependencies ---")
-        all_impacted_nodes = set()
-        for node_id in directly_affected:
-            all_impacted_nodes.add(node_id)
-            # Find all nodes that depend on the directly affected node
-            # In our graph, ancestors are consumers (dependents)
-            if node_id in self.new_graph:
-                downstream_dependents = nx.ancestors(self.new_graph, node_id)
-                all_impacted_nodes.update(downstream_dependents)
 
-        impacted_tables = {n for n in all_impacted_nodes if self.new_graph.nodes[n].get('type') == TBL_PREFIX}
-        impacted_columns = {n for n in all_impacted_nodes if self.new_graph.nodes[n].get('type') == COL_PREFIX}
-        
-        if impacted_tables: self.logger.info(f"  Impacted tables ({len(impacted_tables)}): {sorted(list(impacted_tables))}")
-        if impacted_columns: self.logger.info(f"  Impacted columns ({len(impacted_columns)}): {sorted(list(impacted_columns))}")
+        # Tier 1 — precise impact derived from column lineage.
+        impacted_columns = self._reverse_bfs(column_seeds, {EDGE_COL_DEP})
+        precise_tables = self._tables_owning_columns(impacted_columns) | (
+            table_seeds & set(self.new_graph.nodes)
+        )
+
+        self._log_impacted_columns(impacted_columns)
+        self._log_impacted_tables("Impacted tables (precise)", precise_tables)
+
+        # Tier 2 — table-level reachability. Lower confidence: may flag tables
+        # that only consume the upstream's other columns. Hidden behind a flag.
+        if self.show_table_level_fallback:
+            owner_tables = self._tables_owning_columns_in_either_graph(column_seeds)
+            fallback_seeds = (table_seeds | owner_tables) & set(self.new_graph.nodes)
+            fallback_reach = self._reverse_bfs(fallback_seeds, {EDGE_TBL_DEP})
+            fallback_only = fallback_reach - precise_tables
+            self._log_impacted_tables(
+                "Possibly impacted tables (table-level fallback, low confidence)",
+                fallback_only,
+            )
+
+    def _classify_change_seeds(
+        self,
+        removed_nodes: Set[str],
+        removed_edges: Set[Tuple[str, str]],
+        added_nodes: Set[str],
+        added_edges: Set[Tuple[str, str]],
+    ) -> Tuple[Set[str], Set[str]]:
+        """Splits raw change-set into column- and table-level propagation seeds.
+
+        Edge changes are routed by edge type so that column changes do not
+        accidentally seed table-level propagation:
+          * column_dependency  -> column seed (the dependent side, ``u``)
+          * table_dependency   -> table seed (the dependent side, ``u``)
+          * contains_column    -> column seed (the column endpoint, ``v``)
+        """
+        column_seeds: Set[str] = set()
+        table_seeds: Set[str] = set()
+
+        def _seed_node(node_id: str, graph: nx.DiGraph) -> None:
+            kind = graph.nodes.get(node_id, {}).get('type')
+            if kind == COL_PREFIX:
+                column_seeds.add(node_id)
+            elif kind == TBL_PREFIX:
+                table_seeds.add(node_id)
+
+        for node in removed_nodes:
+            _seed_node(node, self.old_graph)
+        for node in added_nodes:
+            _seed_node(node, self.new_graph)
+
+        for graph, edges in ((self.old_graph, removed_edges), (self.new_graph, added_edges)):
+            for u, v in edges:
+                edge_type = graph.get_edge_data(u, v, default={}).get('type')
+                if edge_type == EDGE_COL_DEP:
+                    column_seeds.add(u)
+                elif edge_type == EDGE_TBL_DEP:
+                    table_seeds.add(u)
+                elif edge_type == EDGE_CONTAINS:
+                    column_seeds.add(v)
+
+        return column_seeds, table_seeds
+
+    def _reverse_bfs(self, seeds: Set[str], allowed_edge_types: Set[str]) -> Set[str]:
+        """Walk new_graph backwards from seeds using only the allowed edge types."""
+        visited: Set[str] = set()
+        stack = [n for n in seeds if n in self.new_graph]
+        while stack:
+            node = stack.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            for pred in self.new_graph.predecessors(node):
+                edge_type = self.new_graph.edges[pred, node].get('type')
+                if edge_type in allowed_edge_types:
+                    stack.append(pred)
+        return visited
+
+    def _tables_owning_columns(self, columns: Set[str]) -> Set[str]:
+        """Tables (in new_graph) that contain any of the given columns."""
+        owners: Set[str] = set()
+        for col in columns:
+            if col not in self.new_graph:
+                continue
+            for pred in self.new_graph.predecessors(col):
+                if self.new_graph.edges[pred, col].get('type') == EDGE_CONTAINS:
+                    owners.add(pred)
+        return owners
+
+    def _tables_owning_columns_in_either_graph(self, columns: Set[str]) -> Set[str]:
+        """Same as ``_tables_owning_columns`` but consults old graph as a fallback.
+
+        Useful when a column was removed in the new graph yet we still want to
+        identify the table it used to belong to.
+        """
+        owners: Set[str] = set()
+        for col in columns:
+            for graph in (self.new_graph, self.old_graph):
+                if col not in graph:
+                    continue
+                found = False
+                for pred in graph.predecessors(col):
+                    if graph.edges[pred, col].get('type') == EDGE_CONTAINS:
+                        owners.add(pred)
+                        found = True
+                if found:
+                    break
+        return owners
+
+    def _log_impacted_columns(self, columns: Set[str]) -> None:
+        if not columns:
+            return
+        self.logger.info(f"  Impacted columns ({len(columns)}): {sorted(columns)}")
+
+    def _log_impacted_tables(self, label: str, tables: Set[str]) -> None:
+        """Prints impacted tables filtered by hidden schemas, with a count of suppressed entries."""
+        if not tables:
+            return
+        visible = {t for t in tables if not self._is_hidden(t)}
+        hidden = len(tables) - len(visible)
+        if visible:
+            self.logger.info(f"  {label} ({len(visible)}): {sorted(visible)}")
+        if hidden:
+            self.logger.info(
+                f"    (suppressed {hidden} table(s) in hidden schemas: "
+                f"{sorted(self.hidden_schemas)})"
+            )
+
+    def _is_hidden(self, table_id: str) -> bool:
+        """Whether the given table belongs to a schema configured as hidden."""
+        if not self.hidden_schemas:
+            return False
+        for graph in (self.new_graph, self.old_graph):
+            if table_id in graph:
+                schema = graph.nodes[table_id].get('schema')
+                return bool(schema) and schema in self.hidden_schemas
+        return False
 
 
 class SQLAnalyzer:
@@ -855,7 +1011,12 @@ class SQLAnalyzer:
         current_graph.build_from_models(all_models)
 
         # 5. Compare and report changes
-        change_detector = ChangeDetector(old_graph, current_graph)
+        change_detector = ChangeDetector(
+            old_graph,
+            current_graph,
+            hidden_schemas=self.config.impact_hidden_schemas,
+            show_table_level_fallback=self.config.impact_show_table_level_fallback,
+        )
         change_detector.report_changes()
 
         # 6. Save the new state
